@@ -180,28 +180,49 @@ def main():
                 voice_model = st.selectbox(
                     "Voice Model",
                     options=[
-                        "eleven_multilingual_v2",   # Best for PVC and prosody
-                        "eleven_turbo_v2_5",        # Latest turbo model (2024)
-                        "eleven_turbo_v2",          # Fast, good quality
-                        "eleven_v3",                # Latest v3 model (2024) - Note: no request stitching
-                        "eleven_multilingual_v1",   # Standard multilingual
-                        "eleven_monolingual_v1"     # English only, fast
+                        "eleven_multilingual_v2",   # ⭐ Recommended for PVC - 29 languages, 10k chars
+                        "eleven_flash_v2_5",        # Ultra-fast (~75ms) - 32 languages, 40k chars
+                        "eleven_turbo_v2_5",        # Balanced quality/speed - 32 languages, 40k chars
+                        "eleven_v3",                # Most expressive (alpha) - 70+ languages, 3k chars
+                        "eleven_turbo_v2",          # Legacy turbo (English only)
+                        "eleven_flash_v2",          # Legacy flash (English only)
                     ],
                     index=0,
                     help="For Professional Voice Clones: multilingual_v2 recommended (best prosody + request stitching support)"
                 )
-                
+
                 # Model Information
                 if voice_model == "eleven_multilingual_v2":
-                    st.success("**eleven_multilingual_v2**: ⭐ RECOMMENDED for PVC - Best prosody, natural expression, supports request stitching")
+                    st.success("**eleven_multilingual_v2**: ⭐ RECOMMENDED for PVC\n"
+                              "• Best prosody and natural expression\n"
+                              "• Request stitching support for voice consistency\n"
+                              "• 29 languages, 10,000 character limit\n"
+                              "• Most stable for long-form content")
+                elif voice_model == "eleven_flash_v2_5":
+                    st.info("**eleven_flash_v2_5**: Ultra-fast model (~75ms latency)\n"
+                           "• Perfect for real-time applications and Agents\n"
+                           "• 32 languages supported\n"
+                           "• 40,000 character limit\n"
+                           "• 50% lower cost per character")
+                elif voice_model == "eleven_turbo_v2_5":
+                    st.info("**eleven_turbo_v2_5**: Balanced quality and speed\n"
+                           "• Good balance between quality and latency (~250-300ms)\n"
+                           "• 32 languages supported\n"
+                           "• 40,000 character limit\n"
+                           "• 50% lower cost per character")
                 elif voice_model == "eleven_v3":
-                    st.warning("**eleven_v3**: Latest model (3,000 char limit) but NO request stitching support - may have inconsistent voice")
-                elif "turbo" in voice_model:
-                    st.info("**Turbo models**: Fast generation, good quality, speaking rate control, request stitching support")
-                elif voice_model == "eleven_multilingual_v1":
-                    st.info("**eleven_multilingual_v1**: Good for accents, but v2 recommended for better quality")
-                else:
-                    st.info("**Monolingual models**: English only, fastest generation")
+                    st.warning("**eleven_v3**: Most emotionally expressive (alpha)\n"
+                              "• Human-like speech with high emotional range\n"
+                              "• 70+ languages supported\n"
+                              "• ⚠️ 3,000 character limit (~3 minutes)\n"
+                              "• ⚠️ NO request stitching support - may have voice inconsistency\n"
+                              "• Best for audiobooks, character dialogue, emotional content")
+                elif voice_model == "eleven_turbo_v2":
+                    st.info("**eleven_turbo_v2**: Legacy model (English only)\n"
+                           "• Consider upgrading to eleven_turbo_v2_5 for multilingual support")
+                elif voice_model == "eleven_flash_v2":
+                    st.info("**eleven_flash_v2**: Legacy model (English only)\n"
+                           "• Consider upgrading to eleven_flash_v2_5 for multilingual support")
                 
                 stability = st.slider(
                     "Stability",
