@@ -347,13 +347,13 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
     if voice_settings is None:
         voice_settings = {}
     
-    # Extract voice settings with defaults (based on ElevenLabs best practices)
+    # Extract voice settings with defaults (optimized for Professional Voice Clone expressiveness)
     speaking_rate = voice_settings.get("speaking_rate", float(os.getenv("ELEVEN_SPEAKING_RATE", "0.7")))
-    stability = voice_settings.get("stability", 0.5)  # ElevenLabs recommended: ~50 for consistency
-    similarity_boost = voice_settings.get("similarity_boost", 0.75)  # ElevenLabs recommended: ~75
-    style = voice_settings.get("style", 0.0)
+    stability = voice_settings.get("stability", 0.65)  # Balanced: natural variation while maintaining consistency
+    similarity_boost = voice_settings.get("similarity_boost", 0.85)  # Higher for PVC: tighter match to cloned voice
+    style = voice_settings.get("style", 0.4)  # Moderate expressiveness: adds emotion and naturalness
     use_speaker_boost = voice_settings.get("use_speaker_boost", True)
-    voice_model = voice_settings.get("voice_model", "eleven_monolingual_v1")
+    voice_model = voice_settings.get("voice_model", "eleven_multilingual_v2")  # Better prosody than v1
 
     # Request stitching settings for voice consistency
     use_request_stitching = voice_settings.get("use_request_stitching", True)

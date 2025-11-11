@@ -114,6 +114,14 @@ def main():
                 help="Lower = slower speech, Higher = faster speech"
             )
             
+            # Professional Voice Clone Optimization Info
+            st.info("**🎙️ Optimized for Professional Voice Clones:**\n"
+                   "Settings are pre-configured for natural, expressive output with cloned voices.\n"
+                   "• **Stability (0.65)**: Balanced variation for natural speech\n"
+                   "• **Similarity (0.85)**: Tight match to cloned voice characteristics\n"
+                   "• **Style (0.4)**: Moderate expressiveness to reduce 'robotic' feel\n"
+                   "• **Model (multilingual_v2)**: Best prosody + request stitching support")
+
             # Advanced Voice Settings
             with st.expander("Advanced Voice Settings"):
                 # Voice ID Selection
@@ -172,24 +180,26 @@ def main():
                 voice_model = st.selectbox(
                     "Voice Model",
                     options=[
-                        "eleven_v3",                # Latest v3 model (2024) - 3,000 chars, ~3 min
+                        "eleven_multilingual_v2",   # Best for PVC and prosody
                         "eleven_turbo_v2_5",        # Latest turbo model (2024)
                         "eleven_turbo_v2",          # Fast, good quality
-                        "eleven_multilingual_v2",   # Best for accents
+                        "eleven_v3",                # Latest v3 model (2024) - Note: no request stitching
                         "eleven_multilingual_v1",   # Standard multilingual
                         "eleven_monolingual_v1"     # English only, fast
                     ],
                     index=0,
-                    help="Choose the ElevenLabs model (v3 is newest with 3,000 char limit, v2.5 has best features)"
+                    help="For Professional Voice Clones: multilingual_v2 recommended (best prosody + request stitching support)"
                 )
                 
                 # Model Information
-                if voice_model == "eleven_v3":
-                    st.info("**eleven_v3**: Latest model with 3,000 character limit (~3 minutes of audio)")
+                if voice_model == "eleven_multilingual_v2":
+                    st.success("**eleven_multilingual_v2**: ⭐ RECOMMENDED for PVC - Best prosody, natural expression, supports request stitching")
+                elif voice_model == "eleven_v3":
+                    st.warning("**eleven_v3**: Latest model (3,000 char limit) but NO request stitching support - may have inconsistent voice")
                 elif "turbo" in voice_model:
-                    st.info("**Turbo models**: Fast generation, good quality, speaking rate control")
-                elif "multilingual" in voice_model:
-                    st.info("**Multilingual models**: Best for accents and non-English speech")
+                    st.info("**Turbo models**: Fast generation, good quality, speaking rate control, request stitching support")
+                elif voice_model == "eleven_multilingual_v1":
+                    st.info("**eleven_multilingual_v1**: Good for accents, but v2 recommended for better quality")
                 else:
                     st.info("**Monolingual models**: English only, fastest generation")
                 
@@ -197,27 +207,27 @@ def main():
                     "Stability",
                     min_value=0.0,
                     max_value=1.0,
-                    value=0.5,
+                    value=0.65,
                     step=0.05,
-                    help="Lower = more variation, Higher = more consistent"
+                    help="Lower = more variation, Higher = more consistent. 0.65 = balanced natural variation"
                 )
-                
+
                 similarity_boost = st.slider(
                     "Similarity Boost",
                     min_value=0.0,
                     max_value=1.0,
-                    value=0.75,
+                    value=0.85,
                     step=0.05,
-                    help="How closely to match the original voice"
+                    help="How closely to match the cloned voice. 0.85 = tight match for PVC"
                 )
-                
+
                 style = st.slider(
-                    "Style",
+                    "Style / Expressiveness",
                     min_value=0.0,
                     max_value=1.0,
-                    value=0.0,
+                    value=0.4,
                     step=0.05,
-                    help="Amount of emotional expression"
+                    help="Emotional expression & naturalness. 0.4 = moderate expressiveness (recommended for PVC)"
                 )
                 
                 use_speaker_boost = st.checkbox(
