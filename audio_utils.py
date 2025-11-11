@@ -585,15 +585,22 @@ def stitch_segments(
             # Calculate gap between previous segment end and current segment start
             prev_segment_end_ms = int(segments[i-1]["end"] * 1000)
             original_gap_ms = segment_start_ms - prev_segment_end_ms
-            
-            if original_gap_ms > 0:
-                print(f"Adding {original_gap_ms/1000:.1f}s original gap before segment {i+1}")
-                final_audio += AudioSegment.silent(duration=original_gap_ms)
-            elif original_gap_ms < 0:
-                # Segments overlap in original - add small buffer
-                buffer_ms = 100  # 100ms buffer for overlapping segments
-                print(f"Original segments overlapped by {abs(original_gap_ms)/1000:.1f}s, adding {buffer_ms}ms buffer")
-                final_audio += AudioSegment.silent(duration=buffer_ms)
+
+            # Ensure minimum natural pause between segments (prevents rushed speech)
+            MINIMUM_GAP_MS = 150  # Natural breathing pause for short segments
+
+            if original_gap_ms >= 0:
+                # Use original gap but ensure minimum 150ms for natural speech rhythm
+                gap_to_add = max(original_gap_ms, MINIMUM_GAP_MS)
+                if gap_to_add > original_gap_ms:
+                    print(f"Original gap {original_gap_ms}ms too short, adding minimum {MINIMUM_GAP_MS}ms before segment {i+1}")
+                else:
+                    print(f"Adding {original_gap_ms/1000:.1f}s original gap before segment {i+1}")
+                final_audio += AudioSegment.silent(duration=gap_to_add)
+            else:
+                # Segments overlap in original - use minimum gap
+                print(f"Original segments overlapped by {abs(original_gap_ms)/1000:.1f}s, adding minimum {MINIMUM_GAP_MS}ms gap")
+                final_audio += AudioSegment.silent(duration=MINIMUM_GAP_MS)
 
         # Add the segment to final audio with crossfading for smooth transitions
         # Only crossfade if:
