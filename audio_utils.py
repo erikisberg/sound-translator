@@ -131,8 +131,8 @@ def transcribe_file(audio_path: str, working_dir: Path) -> List[Dict[str, Any]]:
                 beam_size=5,
                 best_of=5,
                 temperature=0.0,
-                # More conservative VAD settings
-                vad_filter=True,
+                # Disable VAD to capture all audio content
+                vad_filter=False,
                 # Lower detection threshold for quiet speech
                 no_speech_threshold=0.4,  # Lower = more sensitive (default 0.6)
                 compression_ratio_threshold=2.4,
@@ -142,12 +142,13 @@ def transcribe_file(audio_path: str, working_dir: Path) -> List[Dict[str, Any]]:
             print(f"Advanced settings failed: {vad_error}")
             print("Falling back to basic transcription settings...")
             
-            # Fallback to basic settings without VAD parameters
+            # Fallback to basic settings without VAD
             segments, info = model.transcribe(
                 processed_audio_path,
                 language="sv",  # Swedish
                 beam_size=5,
                 temperature=0.0,
+                vad_filter=False,  # Disable VAD to capture all content
                 no_speech_threshold=0.4
             )
         
