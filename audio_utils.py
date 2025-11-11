@@ -542,7 +542,7 @@ def stitch_segments(
     audio_files: List[Path],
     working_dir: Path,
     enable_enhancement: bool = True,
-    crossfade_duration_ms: int = 75
+    crossfade_duration_ms: int = 25
 ) -> Path:
     """
     Stitch TTS audio segments using start time only with audio normalization and crossfading.
@@ -567,12 +567,7 @@ def stitch_segments(
     audio_segments = []
     
     for i, (segment, audio_file) in enumerate(zip(segments, audio_files)):
-        # Optionally enhance audio quality
-        if enable_enhancement:
-            print(f"Enhancing audio segment {i+1}/{len(segments)}...")
-            audio_file = enhance_audio_segment(audio_file, working_dir)
-        
-        # Load generated audio
+        # Load generated audio directly (skip per-segment enhancement to prevent artifacts)
         generated_audio = AudioSegment.from_file(audio_file)
         
         # Calculate timing - use start time only
@@ -665,11 +660,11 @@ def normalize_audio_segments(final_audio: AudioSegment, audio_segments: List[Dic
         # Normalize the entire audio
         normalized_audio = final_audio.normalize()
         
-        # Apply gentle compression to even out volume levels
+        # Apply gentle compression to even out volume levels (reduced ratio to prevent artifacts)
         normalized_audio = normalized_audio.compress_dynamic_range(
-            threshold=-20.0, 
-            ratio=3.0, 
-            attack=5.0, 
+            threshold=-20.0,
+            ratio=1.5,  # Reduced from 3.0 to prevent distortion/noise
+            attack=5.0,
             release=50.0
         )
         
