@@ -475,7 +475,10 @@ def main():
                     use_container_width=True,
                     num_rows="dynamic"  # Allow adding/removing rows
                 )
-                
+
+                # Timing info
+                st.info("**Note:** Timing shows original Swedish audio. Natural pauses (min 150ms) are automatically added between segments during voice generation.")
+
                 # Translation
                 st.header("Translation")
                 col1, col2 = st.columns([1, 3])
