@@ -5,6 +5,7 @@ elevenlabs>=1.19.0
 deepl>=1.22.0
 pydub>=0.25.1
 audioop-lts>=0.2.1
+pyloudnorm>=0.1.0
 torch>=2.5.1
 httpx>=0.28.1
 python-dotenv>=1.0.1
