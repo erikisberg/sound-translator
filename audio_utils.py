@@ -121,8 +121,8 @@ def transcribe_file(audio_path: str, working_dir: Path, model_name: str = "large
             try:
                 segment_count += 1
 
-                # Log every segment for first 10, then every 5th
-                if segment_count <= 10 or segment_count % 5 == 0:
+                # Log every segment for first 10, then every 10th
+                if segment_count <= 10 or segment_count % 10 == 0:
                     logger.info(f"Processing segment {segment_count}...")
 
                 # Safety limit to prevent memory exhaustion
@@ -146,10 +146,6 @@ def transcribe_file(audio_path: str, working_dir: Path, model_name: str = "large
                             "text": text
                         }
                         segment_list.append(segment_data)
-
-                        # Force garbage collection every 10 segments
-                        if segment_count % 10 == 0:
-                            gc.collect()
 
                     except Exception as data_error:
                         logger.error(f"Failed to create segment data for segment {segment_count}: {data_error}")
