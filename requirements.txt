@@ -4,5 +4,6 @@ openai>=1.62.0
 elevenlabs>=1.19.0
 deepl>=1.22.0
 pydub>=0.25.1
+audioop-lts>=0.2.1
 httpx>=0.28.1
 python-dotenv>=1.0.1 
