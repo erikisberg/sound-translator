@@ -5,6 +5,7 @@ Audio processing utilities for Swedish Audio Translator
 import os
 import json
 import base64
+import logging
 import numpy as np
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -14,6 +15,13 @@ from faster_whisper import WhisperModel
 from pydub import AudioSegment
 from pydub.effects import normalize, compress_dynamic_range
 import pyloudnorm as pyln
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Make torch optional - it's only used for CUDA detection (not available on macOS anyway)
 try:
@@ -106,27 +114,38 @@ def preprocess_audio(audio_path: str, working_dir: Path) -> str:
 def transcribe_file(audio_path: str, working_dir: Path) -> List[Dict[str, Any]]:
     """
     Transcribe audio file using faster-whisper with improved speech detection.
-    
+
     Args:
         audio_path: Path to audio file
         working_dir: Directory for intermediate files
-        
+
     Returns:
         List of segments with start, end, text
     """
+    logger.info(f"Starting transcription for: {audio_path}")
+
     # Preprocess audio for better detection
-    processed_audio_path = preprocess_audio(audio_path, working_dir)
+    try:
+        processed_audio_path = preprocess_audio(audio_path, working_dir)
+        logger.info(f"Audio preprocessed successfully: {processed_audio_path}")
+    except Exception as e:
+        logger.error(f"Audio preprocessing failed: {e}", exc_info=True)
+        raise
 
     # Try GPU first, fallback to CPU
     device = "cuda" if (TORCH_AVAILABLE and torch.cuda.is_available()) else "cpu"
     compute_type = "float16" if device == "cuda" else "int8"
-    
+    logger.info(f"Using device: {device}, compute_type: {compute_type}")
+
     try:
+        logger.info("Loading Whisper model: large-v3-turbo")
         model = WhisperModel("large-v3-turbo", device=device, compute_type=compute_type)
+        logger.info("Whisper model loaded successfully")
         
         # Start with basic transcription settings that are known to work
         try:
             # Try with advanced settings first
+            logger.info("Starting transcription with advanced settings")
             segments, info = model.transcribe(
                 processed_audio_path,
                 language="sv",  # Swedish
@@ -140,10 +159,11 @@ def transcribe_file(audio_path: str, working_dir: Path) -> List[Dict[str, Any]]:
                 compression_ratio_threshold=2.4,
                 condition_on_previous_text=True
             )
+            logger.info("Advanced settings transcription completed")
         except Exception as vad_error:
-            print(f"Advanced settings failed: {vad_error}")
-            print("Falling back to basic transcription settings...")
-            
+            logger.warning(f"Advanced settings failed: {vad_error}")
+            logger.info("Falling back to basic transcription settings...")
+
             # Fallback to basic settings without VAD
             segments, info = model.transcribe(
                 processed_audio_path,
@@ -153,8 +173,10 @@ def transcribe_file(audio_path: str, working_dir: Path) -> List[Dict[str, Any]]:
                 vad_filter=False,  # Disable VAD to capture all content
                 no_speech_threshold=0.4
             )
+            logger.info("Basic settings transcription completed")
         
         # Convert to list format with additional validation
+        logger.info("Converting segments to list format")
         segment_list = []
         for segment in segments:
             text = segment.text.strip()
@@ -165,7 +187,7 @@ def transcribe_file(audio_path: str, working_dir: Path) -> List[Dict[str, Any]]:
                     "end": round(segment.end, 3),
                     "text": text
                 }
-                
+
                 # Add word-level data if available (optional)
                 try:
                     if hasattr(segment, 'words') and segment.words:
@@ -179,15 +201,15 @@ def transcribe_file(audio_path: str, working_dir: Path) -> List[Dict[str, Any]]:
                             for word in segment.words
                         ]
                 except Exception as word_error:
-                    print(f"Word-level timestamps not available: {word_error}")
-                
+                    logger.debug(f"Word-level timestamps not available: {word_error}")
+
                 segment_list.append(segment_data)
         
         # Log transcription info
-        print(f"Transcription completed: {len(segment_list)} segments detected")
-        print(f"Language detected: {info.language} (probability: {info.language_probability:.2f})")
-        print(f"Total duration: {info.duration:.2f}s")
-        
+        logger.info(f"Transcription completed: {len(segment_list)} segments detected")
+        logger.info(f"Language detected: {info.language} (probability: {info.language_probability:.2f})")
+        logger.info(f"Total duration: {info.duration:.2f}s")
+
         # Save transcription with detailed info
         transcript_data = {
             "segments": segment_list,
@@ -198,36 +220,38 @@ def transcribe_file(audio_path: str, working_dir: Path) -> List[Dict[str, Any]]:
                 "total_segments": len(segment_list)
             }
         }
-        
+
         transcript_path = working_dir / "transcript.json"
         with open(transcript_path, "w", encoding="utf-8") as f:
             json.dump(transcript_data, f, ensure_ascii=False, indent=2)
-        
+        logger.info(f"Transcript saved to: {transcript_path}")
+
         return segment_list
-        
+
     except Exception as e:
-        print(f"Transcription error details: {str(e)}")
-        print(f"Processed audio path: {processed_audio_path}")
-        print(f"Device: {device}, Compute type: {compute_type}")
+        logger.error(f"Transcription error details: {str(e)}", exc_info=True)
+        logger.error(f"Processed audio path: {processed_audio_path}")
+        logger.error(f"Device: {device}, Compute type: {compute_type}")
         raise RuntimeError(f"Whisper transcription failed: {str(e)}")
 
 
 def translate_segments(
-    segments: List[Dict[str, Any]], 
+    segments: List[Dict[str, Any]],
     service: str,
     working_dir: Path
 ) -> List[Dict[str, Any]]:
     """
     Translate Swedish segments to English.
-    
+
     Args:
         segments: List of transcribed segments
         service: "openai" or "deepl"
         working_dir: Directory for intermediate files
-        
+
     Returns:
         List of segments with English translations
     """
+    logger.info(f"Starting translation with {service} for {len(segments)} segments")
     if service == "deepl":
         return _translate_with_deepl(segments, working_dir)
     elif service == "openai":
@@ -238,62 +262,70 @@ def translate_segments(
 
 def _translate_with_deepl(segments: List[Dict[str, Any]], working_dir: Path) -> List[Dict[str, Any]]:
     """Translate using DeepL API."""
+    logger.info("Using DeepL for translation")
     api_key = os.getenv("DEEPL_API_KEY")
     if not api_key:
+        logger.error("DEEPL_API_KEY not found in environment")
         raise ValueError("DEEPL_API_KEY not found")
-    
+
     url = "https://api-free.deepl.com/v2/translate"
     headers = {"Authorization": f"DeepL-Auth-Key {api_key}"}
-    
+
     translated_segments = []
-    
+
     for i, segment in enumerate(segments):
         try:
+            logger.debug(f"Translating segment {i+1}/{len(segments)}")
             data = {
                 "text": segment["text"],
                 "source_lang": "SV",
                 "target_lang": "EN-US",
                 "preserve_formatting": "1"
             }
-            
+
             with httpx.Client() as client:
                 response = client.post(url, headers=headers, data=data)
                 response.raise_for_status()
-                
+
                 result = response.json()
                 english_text = result["translations"][0]["text"]
-                
+
                 translated_segment = segment.copy()
                 translated_segment["english"] = english_text
                 translated_segments.append(translated_segment)
-                
+
         except Exception as e:
+            logger.error(f"DeepL translation failed for segment {i}: {str(e)}", exc_info=True)
             raise RuntimeError(f"DeepL translation failed for segment {i}: {str(e)}")
-    
+
     # Save translations
     translation_path = working_dir / "translations.json"
     with open(translation_path, "w", encoding="utf-8") as f:
         json.dump(translated_segments, f, ensure_ascii=False, indent=2)
-    
+    logger.info(f"Translations saved to: {translation_path}")
+
     return translated_segments
 
 
 def _translate_with_openai(segments: List[Dict[str, Any]], working_dir: Path) -> List[Dict[str, Any]]:
     """Translate using OpenAI GPT-4o."""
+    logger.info("Using OpenAI for translation")
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
+        logger.error("OPENAI_API_KEY not found in environment")
         raise ValueError("OPENAI_API_KEY not found")
-    
+
     client = OpenAI(api_key=api_key)
     translated_segments = []
-    
+
     # Batch translate for efficiency
     swedish_texts = [seg["text"] for seg in segments]
     prompt = f"""Translate these Swedish text segments to English. Maintain the original formatting and preserve line breaks. Return only the English translations, one per line:
 
 {chr(10).join(swedish_texts)}"""
-    
+
     try:
+        logger.info(f"Sending {len(segments)} segments to OpenAI for translation")
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -302,48 +334,53 @@ def _translate_with_openai(segments: List[Dict[str, Any]], working_dir: Path) ->
             ],
             temperature=0.3
         )
-        
+
         english_lines = response.choices[0].message.content.strip().split('\n')
-        
+        logger.info(f"Received {len(english_lines)} translated lines from OpenAI")
+
         # Match translations to segments
         for i, segment in enumerate(segments):
             english_text = english_lines[i] if i < len(english_lines) else ""
             translated_segment = segment.copy()
             translated_segment["english"] = english_text
             translated_segments.append(translated_segment)
-            
+
     except Exception as e:
+        logger.error(f"OpenAI translation failed: {str(e)}", exc_info=True)
         raise RuntimeError(f"OpenAI translation failed: {str(e)}")
-    
+
     # Save translations
     translation_path = working_dir / "translations.json"
     with open(translation_path, "w", encoding="utf-8") as f:
         json.dump(translated_segments, f, ensure_ascii=False, indent=2)
-    
+    logger.info(f"Translations saved to: {translation_path}")
+
     return translated_segments
 
 
 def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settings: Dict[str, Any] = None) -> List[Path]:
     """
     Generate TTS audio for English segments using ElevenLabs.
-    
+
     Args:
         segments: Segments with English text
         working_dir: Directory for audio files
         voice_settings: Dictionary with voice configuration settings
-        
+
     Returns:
         List of audio file paths
     """
+    logger.info(f"Starting TTS generation for {len(segments)} segments")
     api_key = os.getenv("ELEVEN_API_KEY")
-    
+
     # Use voice_id from settings or fallback to environment variable
     if voice_settings and voice_settings.get("voice_id"):
         voice_id = voice_settings["voice_id"]
     else:
         voice_id = os.getenv("ELEVEN_VOICE_ID")
-    
+
     if not api_key or not voice_id:
+        logger.error("ELEVEN_API_KEY or voice_id not found in environment")
         raise ValueError("ELEVEN_API_KEY or voice_id not found")
     
     # Use provided voice settings or defaults
@@ -358,10 +395,12 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
     use_speaker_boost = voice_settings.get("use_speaker_boost", True)
     voice_model = voice_settings.get("voice_model", "eleven_multilingual_v2")  # Better prosody than v1
 
+    logger.info(f"Voice settings: voice_id={voice_id}, model={voice_model}, rate={speaking_rate}")
+
     # Request stitching settings for voice consistency
     use_request_stitching = voice_settings.get("use_request_stitching", True)
     context_window_size = voice_settings.get("context_window_size", 3)
-    
+
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
     headers = {
         "Accept": "application/json",
@@ -378,9 +417,11 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
     previous_request_ids = []
 
     for i, segment in enumerate(segments):
+        logger.info(f"Processing segment {i+1}/{len(segments)}")
         english_text = segment.get("english", "").strip()
         if not english_text:
             # Create silent audio for empty segments
+            logger.debug(f"Segment {i+1} has no text, creating silent audio")
             duration_ms = int((segment["end"] - segment["start"]) * 1000)
             silent_audio = AudioSegment.silent(duration=duration_ms)
             file_path = tts_dir / f"segment_{i:03d}.wav"
@@ -434,7 +475,7 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
                 request_id = response.headers.get("request-id")
                 if request_id and use_request_stitching:
                     previous_request_ids.append(request_id)
-                    print(f"  → Captured request-id for segment {i+1}: {request_id[:8]}...")
+                    logger.debug(f"Captured request-id for segment {i+1}: {request_id[:8]}...")
 
                 # Save audio file
                 file_path = tts_dir / f"segment_{i:03d}.wav"
@@ -442,14 +483,17 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
                     f.write(response.content)
 
                 audio_files.append(file_path)
+                logger.info(f"Segment {i+1} TTS completed successfully")
 
                 # Add current text to context history for next segments
                 if use_request_stitching:
                     previous_texts.append(english_text)
 
         except Exception as e:
+            logger.error(f"TTS generation failed for segment {i}: {str(e)}", exc_info=True)
             raise RuntimeError(f"TTS generation failed for segment {i}: {str(e)}")
-    
+
+    logger.info(f"TTS generation completed successfully for all {len(audio_files)} segments")
     return audio_files
 
 
