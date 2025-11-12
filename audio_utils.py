@@ -113,31 +113,47 @@ def transcribe_file(audio_path: str, working_dir: Path, model_name: str = "large
         segment_count = 0
 
         logger.info("Starting to process segments from generator...")
+
+        # Limit max segments to prevent memory issues (can be adjusted)
+        MAX_SEGMENTS = 200
+
         for segment in segments:
             try:
                 segment_count += 1
-                if segment_count % 5 == 0:  # Log every 5th segment for better progress visibility
-                    logger.info(f"Processed {segment_count} segments...")
 
-                text = segment.text.strip()
+                # Log every segment for first 10, then every 5th
+                if segment_count <= 10 or segment_count % 5 == 0:
+                    logger.info(f"Processing segment {segment_count}...")
+
+                # Safety limit to prevent memory exhaustion
+                if segment_count > MAX_SEGMENTS:
+                    logger.warning(f"Reached maximum segment limit ({MAX_SEGMENTS}), stopping...")
+                    break
+
+                # Extract text with explicit error handling
+                try:
+                    text = str(segment.text).strip() if hasattr(segment, 'text') else ""
+                except Exception as text_error:
+                    logger.error(f"Failed to extract text from segment {segment_count}: {text_error}")
+                    continue
 
                 # Only include segments with actual speech content
-                if text and len(text) > 1:  # Skip very short or empty segments
-                    segment_data = {
-                        "start": round(segment.start, 3),
-                        "end": round(segment.end, 3),
-                        "text": text
-                    }
+                if text and len(text) > 1:
+                    try:
+                        segment_data = {
+                            "start": round(float(segment.start), 3) if hasattr(segment, 'start') else 0.0,
+                            "end": round(float(segment.end), 3) if hasattr(segment, 'end') else 0.0,
+                            "text": text
+                        }
+                        segment_list.append(segment_data)
 
-                    # Skip word-level data to save memory (critical for Streamlit Cloud)
-                    # Word-level timestamps take significant RAM and aren't needed for basic functionality
-                    # try:
-                    #     if hasattr(segment, 'words') and segment.words:
-                    #         segment_data["words"] = [...]
-                    # except Exception as word_error:
-                    #     logger.debug(f"Word-level timestamps not available: {word_error}")
+                        # Force garbage collection every 10 segments
+                        if segment_count % 10 == 0:
+                            gc.collect()
 
-                    segment_list.append(segment_data)
+                    except Exception as data_error:
+                        logger.error(f"Failed to create segment data for segment {segment_count}: {data_error}")
+                        continue
 
             except Exception as seg_error:
                 logger.error(f"Error processing segment {segment_count}: {seg_error}", exc_info=True)
