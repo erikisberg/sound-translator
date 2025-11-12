@@ -177,9 +177,19 @@ def transcribe_file(audio_path: str, working_dir: Path) -> List[Dict[str, Any]]:
         
         # Convert to list format with additional validation
         logger.info("Converting segments to list format")
+
+        # Convert generator to list first (segments is a generator object)
+        try:
+            logger.info("Converting generator to list...")
+            segments_list = list(segments)
+            logger.info(f"Generator converted successfully, found {len(segments_list)} raw segments")
+        except Exception as gen_error:
+            logger.error(f"Failed to convert segments generator to list: {gen_error}", exc_info=True)
+            raise
+
         segment_list = []
         segment_count = 0
-        for segment in segments:
+        for segment in segments_list:
             try:
                 segment_count += 1
                 if segment_count % 10 == 0:  # Log every 10th segment to avoid spam
