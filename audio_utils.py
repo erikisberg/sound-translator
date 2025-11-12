@@ -405,7 +405,7 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
         voice_settings = {}
     
     # Extract voice settings with defaults (optimized for Professional Voice Clone expressiveness)
-    speaking_rate = voice_settings.get("speaking_rate", float(os.getenv("ELEVEN_SPEAKING_RATE", "0.7")))
+    speaking_rate = voice_settings.get("speaking_rate", float(os.getenv("ELEVEN_SPEAKING_RATE", "1.0")))
     stability = voice_settings.get("stability", 0.65)  # Balanced: natural variation while maintaining consistency
     similarity_boost = voice_settings.get("similarity_boost", 0.85)  # Higher for PVC: tighter match to cloned voice
     style = voice_settings.get("style", 0.4)  # Moderate expressiveness: adds emotion and naturalness
@@ -478,11 +478,14 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
                     # Use last N request IDs (requests must be <2 hours old)
                     data["previous_request_ids"] = previous_request_ids[-context_window_size:]
             
-            # Add speaking rate for compatible models (v3, v2.5 and turbo models)
-            if "v3" in voice_model or "turbo" in voice_model or "v2" in voice_model:
-                # Speaking rate control (0.25 - 4.0)
-                rate = max(0.25, min(4.0, speaking_rate))
-                data["voice_settings"]["speaking_rate"] = rate
+            # Add speed control for supported models
+            # Note: Not all models support speed parameter
+            # Safe models: eleven_turbo_v2_5, eleven_flash_v2_5, eleven_multilingual_v2
+            if voice_model in ["eleven_turbo_v2_5", "eleven_flash_v2_5", "eleven_multilingual_v2", "eleven_multilingual_v2_5"]:
+                # Speed control: Valid range is 0.7-1.2 (1.0 = normal, 0.7 = slowest, 1.2 = fastest)
+                speed = max(0.7, min(1.2, speaking_rate))
+                data["voice_settings"]["speed"] = speed
+                logger.info(f"Using speed={speed} for model {voice_model}")
             
             with httpx.Client(timeout=30.0) as client:
                 response = client.post(url, headers=headers, json=data)

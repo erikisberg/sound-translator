@@ -107,11 +107,11 @@ def main():
             # Speaking Rate
             speaking_rate = st.slider(
                 "Speaking Rate",
-                min_value=0.25,
-                max_value=2.0,
-                value=float(st.secrets.get("ELEVEN_SPEAKING_RATE", "0.7")),
+                min_value=0.7,
+                max_value=1.2,
+                value=float(st.secrets.get("ELEVEN_SPEAKING_RATE", "1.0")),
                 step=0.05,
-                help="Lower = slower speech, Higher = faster speech"
+                help="Adjust speech speed: 0.7 = slowest, 1.0 = normal (default), 1.2 = fastest"
             )
             
             # Professional Voice Clone Optimization Info
@@ -487,8 +487,20 @@ def main():
                     if st.button("Translate All", type="primary", disabled=not translation_service):
                         with st.spinner(f"Translating with {translation_service.upper()}..."):
                             try:
+                                # Update segments from edited dataframe first (to preserve deletions/edits)
+                                updated_segments = []
+                                for i, (_, row) in enumerate(edited_df.iterrows()):
+                                    if i < len(st.session_state.segments):
+                                        seg = st.session_state.segments[i].copy()
+                                        seg["text"] = row["Swedish"]
+                                        updated_segments.append(seg)
+
+                                # Update session state with edited segments
+                                st.session_state.segments = updated_segments
+
+                                # Now translate the updated segments
                                 translated = translate_segments(
-                                    st.session_state.segments,
+                                    updated_segments,
                                     service=translation_service,
                                     working_dir=st.session_state.working_dir
                                 )
@@ -514,14 +526,19 @@ def main():
                     if st.button("Generate Voice", type="primary", disabled=not tts_ready):
                         with st.spinner("Generating TTS with natural timing and audio normalization..."):
                             try:
-                                # Use edited English text from dataframe
+                                # Use edited text from dataframe (preserves deletions/edits)
                                 updated_segments = []
                                 for i, (_, row) in enumerate(edited_df.iterrows()):
                                     if i < len(st.session_state.segments):
                                         seg = st.session_state.segments[i].copy()
+                                        seg["text"] = row["Swedish"]
                                         seg["english"] = row["English"] or ""
                                         updated_segments.append(seg)
-                                
+
+                                # Update session state with edited segments
+                                st.session_state.segments = updated_segments
+                                st.session_state.translated_segments = updated_segments
+
                                 # Generate TTS for each segment with custom settings
                                 voice_settings = getattr(st.session_state, 'voice_settings', {})
                                 audio_files = generate_tts(
