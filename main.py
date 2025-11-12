@@ -286,7 +286,6 @@ def main():
                     st.write(f"**Similarity:** {similarity_boost:.2f}")
                     st.write(f"**Style:** {style:.2f}")
                     st.write(f"**Model:** {voice_model}")
-                    st.write(f"**Enhancement:** {'Enabled' if enable_enhancement else 'Disabled'}")
 
     # File Upload
     st.header("Upload Audio File")
