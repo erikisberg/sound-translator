@@ -4,18 +4,14 @@ Audio processing utilities for Swedish Audio Translator
 
 import os
 import json
-import base64
 import logging
 import gc
-import numpy as np
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import httpx
 from openai import OpenAI
 from faster_whisper import WhisperModel
 from pydub import AudioSegment
-from pydub.effects import normalize, compress_dynamic_range
-import pyloudnorm as pyln
 
 # Configure logging
 logging.basicConfig(
@@ -24,92 +20,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Make torch optional - it's only used for CUDA detection (not available on macOS anyway)
-try:
-    import torch
-    TORCH_AVAILABLE = True
-except Exception as e:
-    print(f"Warning: torch import failed ({e}), defaulting to CPU device")
-    TORCH_AVAILABLE = False
-
 
 def preprocess_audio(audio_path: str, working_dir: Path) -> str:
     """
-    Preprocess audio to improve speech detection.
-    
+    Minimal audio preprocessing - just return the original path.
+    Whisper handles most audio formats natively and preprocessing was
+    taking too much memory and time on Streamlit Cloud.
+
     Args:
         audio_path: Path to original audio file
-        working_dir: Directory for processed files
-        
+        working_dir: Directory for processed files (unused)
+
     Returns:
-        Path to preprocessed audio file
+        Path to audio file (original, unmodified)
     """
-    try:
-        print(f"Loading audio file: {audio_path}")
-        
-        # Load audio with error handling
-        try:
-            audio = AudioSegment.from_file(audio_path)
-        except Exception as load_error:
-            print(f"Failed to load with pydub, trying different approach: {load_error}")
-            # Try loading as specific format
-            if audio_path.lower().endswith('.mp3'):
-                audio = AudioSegment.from_mp3(audio_path)
-            elif audio_path.lower().endswith('.wav'):
-                audio = AudioSegment.from_wav(audio_path)
-            else:
-                raise load_error
-        
-        print(f"Original audio: {len(audio)}ms duration, {audio.frame_rate}Hz, {audio.channels} channels")
-        
-        # Convert to mono if stereo
-        if audio.channels > 1:
-            audio = audio.set_channels(1)
-            print("Converted to mono")
-        
-        # Normalize volume to improve quiet speech detection
-        try:
-            audio = normalize(audio)
-            print("Audio normalized")
-        except Exception as norm_error:
-            print(f"Normalization failed, continuing: {norm_error}")
-        
-        # Apply gentle compression to even out volume levels
-        try:
-            audio = compress_dynamic_range(audio, threshold=-20.0, ratio=2.0, attack=5.0, release=50.0)
-            print("Compression applied")
-        except Exception as comp_error:
-            print(f"Compression failed, continuing: {comp_error}")
-        
-        # High-pass filter to reduce low-frequency noise
-        try:
-            audio = audio.high_pass_filter(80)
-            print("High-pass filter applied")
-        except Exception as filter_error:
-            print(f"High-pass filter failed, continuing: {filter_error}")
-        
-        # Convert to WAV format for consistent processing
-        processed_path = working_dir / "preprocessed_audio.wav"
-        
-        # Export with consistent format
-        audio.export(
-            processed_path, 
-            format="wav", 
-            parameters=[
-                "-ar", "16000",  # 16kHz sample rate
-                "-ac", "1",      # Mono
-                "-sample_fmt", "s16"  # 16-bit samples
-            ]
-        )
-        
-        print(f"Audio preprocessed successfully: {processed_path}")
-        print(f"Final specs: {len(audio)}ms duration, 16000Hz sample rate")
-        return str(processed_path)
-        
-    except Exception as e:
-        print(f"Audio preprocessing failed, using original: {str(e)}")
-        # If preprocessing fails completely, return original path
-        return audio_path
+    logger.info(f"Using audio file as-is: {audio_path}")
+    # Whisper can handle MP3/WAV directly, no preprocessing needed
+    return audio_path
 
 
 def transcribe_file(audio_path: str, working_dir: Path) -> List[Dict[str, Any]]:
@@ -133,9 +60,9 @@ def transcribe_file(audio_path: str, working_dir: Path) -> List[Dict[str, Any]]:
         logger.error(f"Audio preprocessing failed: {e}", exc_info=True)
         raise
 
-    # Try GPU first, fallback to CPU
-    device = "cuda" if (TORCH_AVAILABLE and torch.cuda.is_available()) else "cpu"
-    compute_type = "float16" if device == "cuda" else "int8"
+    # Always use CPU (Streamlit Cloud doesn't have GPU)
+    device = "cpu"
+    compute_type = "int8"
     logger.info(f"Using device: {device}, compute_type: {compute_type}")
 
     try:
@@ -515,97 +442,10 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
     return audio_files
 
 
-def enhance_audio_segment(audio_file: Path, working_dir: Path) -> Path:
-    """
-    Enhance audio quality using available enhancement services.
-    Supports Dolby.io (premium) and basic AudioSegment normalization (free).
-    
-    Args:
-        audio_file: Path to audio file to enhance
-        working_dir: Directory for enhanced files
-        
-    Returns:
-        Path to enhanced audio file
-    """
-    dolby_api_key = os.getenv("DOLBY_API_KEY")
-    
-    enhanced_dir = working_dir / "enhanced_clips"
-    enhanced_dir.mkdir(exist_ok=True)
-    
-    # Method 1: Dolby.io Professional Enhancement
-    if dolby_api_key:
-        try:
-            with open(audio_file, "rb") as f:
-                audio_data = f.read()
-            
-            url = "https://api.dolby.com/media/enhance"
-            headers = {
-                "Authorization": f"Bearer {dolby_api_key}",
-                "Content-Type": "application/json",
-                "Accept": "application/json"
-            }
-            
-            payload = {
-                "input": base64.b64encode(audio_data).decode(),
-                "output": {"format": "wav"},
-                "filter": {
-                    "enhance": {
-                        "type": "speech",
-                        "amount": "medium",
-                        "dynamics": {"range_control": {"enable": True, "amount": "medium"}},
-                        "noise": {"reduction": {"enable": True, "amount": "medium"}}
-                    }
-                }
-            }
-            
-            with httpx.Client(timeout=60.0) as client:
-                response = client.post(url, headers=headers, json=payload)
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    enhanced_audio = base64.b64decode(result["output"])
-                    
-                    enhanced_file = enhanced_dir / f"dolby_enhanced_{audio_file.name}"
-                    with open(enhanced_file, "wb") as f:
-                        f.write(enhanced_audio)
-                    
-                    return enhanced_file
-                    
-        except Exception as e:
-            print(f"Dolby.io enhancement failed: {str(e)}")
-    
-    # Method 2: Basic Enhancement (free, using pydub)
-    try:
-        audio = AudioSegment.from_file(audio_file)
-        
-        # Basic audio improvements
-        enhanced_audio = audio
-        
-        # Normalize volume to prevent clipping
-        enhanced_audio = enhanced_audio.normalize()
-        
-        # Apply gentle compression to even out levels
-        enhanced_audio = enhanced_audio.compress_dynamic_range(threshold=-20.0, ratio=4.0, attack=5.0, release=50.0)
-        
-        # Slight high-pass filter to reduce low-frequency noise (remove frequencies below 80Hz)
-        enhanced_audio = enhanced_audio.high_pass_filter(80)
-        
-        # Save enhanced audio
-        enhanced_file = enhanced_dir / f"basic_enhanced_{audio_file.name}"
-        enhanced_audio.export(enhanced_file, format="wav")
-        
-        return enhanced_file
-        
-    except Exception as e:
-        print(f"Basic audio enhancement failed: {str(e)}")
-        return audio_file
-
-
 def stitch_segments(
     segments: List[Dict[str, Any]],
     audio_files: List[Path],
     working_dir: Path,
-    enable_enhancement: bool = True,
     crossfade_duration_ms: int = 25
 ) -> Path:
     """
@@ -616,7 +456,6 @@ def stitch_segments(
         segments: Original segments with timing
         audio_files: Generated TTS audio files
         working_dir: Directory for output
-        enable_enhancement: Whether to enhance audio quality
         crossfade_duration_ms: Duration of crossfade between segments (default 75ms)
 
     Returns:

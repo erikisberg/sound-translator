@@ -256,27 +256,13 @@ def main():
                     value=True,
                     help="Boost speaker clarity"
                 )
-            
-            # Audio Enhancement Settings
-            st.header("Audio Enhancement")
-            enable_enhancement = st.checkbox(
-                "Enable Audio Enhancement",
-                value=True,
-                help="Improve audio quality (basic enhancement always available)"
-            )
-            
+
             # Audio Processing Information
             st.info("**Audio Processing Features:**\n"
                    "• **Natural Timing**: Uses start time only to prevent speech cutting\n"
                    "• **Original Gaps**: Preserves exact pauses from your Swedish audio\n"
                    "• **Volume Normalization**: Ensures consistent audio levels across all segments\n"
                    "• **Smart Stitching**: Maintains natural rhythm and flow")
-            
-            dolby_key = st.secrets.get("DOLBY_API_KEY") or os.getenv("DOLBY_API_KEY")
-            if dolby_key:
-                st.success("Professional enhancement available (Dolby.io)")
-            else:
-                st.info("Basic enhancement enabled")
             
             # Store settings in session state
             st.session_state.voice_settings = {
@@ -286,8 +272,7 @@ def main():
                 "similarity_boost": similarity_boost,
                 "style": style,
                 "use_speaker_boost": use_speaker_boost,
-                "voice_model": voice_model,
-                "enable_enhancement": enable_enhancement
+                "voice_model": voice_model
             }
             
             # Settings Preview
@@ -547,12 +532,11 @@ def main():
                                     voice_settings=voice_settings
                                 )
                                 
-                                # Stitch segments with proper timing and enhancement
+                                # Stitch segments with proper timing
                                 final_path = stitch_segments(
                                     updated_segments,
                                     audio_files,
-                                    st.session_state.working_dir,
-                                    enable_enhancement=voice_settings.get('enable_enhancement', True)
+                                    st.session_state.working_dir
                                 )
                                 
                                 st.session_state.final_audio_path = final_path
