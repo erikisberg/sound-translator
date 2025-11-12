@@ -111,7 +111,7 @@ def main():
                 "base",            # Basic, 5x faster
                 "tiny"             # Fastest, 8x faster
             ],
-            index=0,
+            index=1,
             help="Choose transcription speed vs quality trade-off"
         )
 
