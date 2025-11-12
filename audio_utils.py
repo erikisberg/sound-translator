@@ -39,18 +39,19 @@ def preprocess_audio(audio_path: str, working_dir: Path) -> str:
     return audio_path
 
 
-def transcribe_file(audio_path: str, working_dir: Path) -> List[Dict[str, Any]]:
+def transcribe_file(audio_path: str, working_dir: Path, model_name: str = "large-v3-turbo") -> List[Dict[str, Any]]:
     """
     Transcribe audio file using faster-whisper with improved speech detection.
 
     Args:
         audio_path: Path to audio file
         working_dir: Directory for intermediate files
+        model_name: Whisper model to use (default: large-v3-turbo)
 
     Returns:
         List of segments with start, end, text
     """
-    logger.info(f"Starting transcription for: {audio_path}")
+    logger.info(f"Starting transcription for: {audio_path} with model: {model_name}")
 
     # Preprocess audio for better detection
     try:
@@ -66,9 +67,9 @@ def transcribe_file(audio_path: str, working_dir: Path) -> List[Dict[str, Any]]:
     logger.info(f"Using device: {device}, compute_type: {compute_type}")
 
     try:
-        logger.info("Loading Whisper model: large-v3-turbo")
-        model = WhisperModel("large-v3-turbo", device=device, compute_type=compute_type)
-        logger.info("Whisper model loaded successfully")
+        logger.info(f"Loading Whisper model: {model_name}")
+        model = WhisperModel(model_name, device=device, compute_type=compute_type)
+        logger.info(f"Whisper model '{model_name}' loaded successfully")
         
         # Start with basic transcription settings that are known to work
         try:
@@ -115,8 +116,8 @@ def transcribe_file(audio_path: str, working_dir: Path) -> List[Dict[str, Any]]:
         for segment in segments:
             try:
                 segment_count += 1
-                if segment_count % 10 == 0:  # Log every 10th segment to avoid spam
-                    logger.info(f"Processing segment {segment_count}...")
+                if segment_count % 5 == 0:  # Log every 5th segment for better progress visibility
+                    logger.info(f"Processed {segment_count} segments...")
 
                 text = segment.text.strip()
 

@@ -99,7 +99,35 @@ def main():
             st.error("ElevenLabs API key missing")
             
         st.write(f"**Working Directory:** `{st.session_state.working_dir}`")
-        
+
+        # Whisper Model Selection
+        st.header("Transcription Settings")
+        whisper_model = st.selectbox(
+            "Whisper Model",
+            options=[
+                "large-v3-turbo",  # Best quality, slowest
+                "medium",          # Good balance, 2x faster
+                "small",           # OK quality, 3x faster
+                "base",            # Basic, 5x faster
+                "tiny"             # Fastest, 8x faster
+            ],
+            index=0,
+            help="Choose transcription speed vs quality trade-off"
+        )
+
+        # Model info
+        model_info = {
+            "large-v3-turbo": "Best quality, ~1.5GB, slowest",
+            "medium": "Good balance, ~770MB, 2x faster",
+            "small": "OK quality, ~490MB, 3x faster",
+            "base": "Basic, ~140MB, 5x faster",
+            "tiny": "Fastest, ~75MB, 8x faster"
+        }
+        st.info(f"**{whisper_model}**: {model_info[whisper_model]}")
+
+        # Store in session state
+        st.session_state.whisper_model = whisper_model
+
         # ElevenLabs Voice Settings
         if eleven_key and eleven_voice:
             st.header("Voice Settings")
@@ -315,44 +343,40 @@ def main():
         
         with col1:
             if st.button("Transcribe", type="primary"):
-                with st.spinner("Transcribing audio with Whisper..."):
-                    try:
-                        # Show progress
-                        progress_bar = st.progress(0)
-                        status_text = st.empty()
-                        
-                        status_text.text("Initializing Whisper model...")
-                        progress_bar.progress(20)
-                        
-                        status_text.text("Processing audio...")
-                        progress_bar.progress(40)
-                        
-                        segments = transcribe_file(str(upload_path), st.session_state.working_dir)
-                        progress_bar.progress(80)
-                        
-                        status_text.text("Transcription complete!")
-                        progress_bar.progress(100)
-                        
-                        st.session_state.segments = segments
-                        st.session_state.translated_segments = []  # Reset translations
-                        
-                        # Clear progress indicators
-                        progress_bar.empty()
-                        status_text.empty()
-                        
-                        if segments:
-                            st.success(f"Found {len(segments)} segments")
-                            
-                            # Show transcription preview
-                            with st.expander("Transcription Preview", expanded=True):
-                                for i, seg in enumerate(segments[:5]):  # Show first 5 segments
-                                    st.write(f"**{i+1}.** [{seg['start']:.1f}s - {seg['end']:.1f}s] {seg['text']}")
-                                if len(segments) > 5:
-                                    st.write(f"... and {len(segments) - 5} more segments")
-                        else:
-                            st.warning("No speech segments detected. Try adjusting audio volume or check for background noise.")
-                            
-                    except Exception as e:
+                try:
+                    # Use status container for better UX
+                    with st.status("Transcribing audio...", expanded=True) as status:
+                        st.write("Loading Whisper model...")
+
+                        # Get selected model from session state
+                        model_name = st.session_state.get('whisper_model', 'large-v3-turbo')
+
+                        # Transcribe with selected model
+                        segments = transcribe_file(
+                            str(upload_path),
+                            st.session_state.working_dir,
+                            model_name=model_name
+                        )
+
+                        st.write(f"✓ Transcription complete! Found {len(segments)} segments")
+                        status.update(label="Transcription complete!", state="complete")
+
+                    st.session_state.segments = segments
+                    st.session_state.translated_segments = []  # Reset translations
+
+                    if segments:
+                        st.success(f"Found {len(segments)} segments")
+
+                        # Show transcription preview
+                        with st.expander("Transcription Preview", expanded=True):
+                            for i, seg in enumerate(segments[:5]):  # Show first 5 segments
+                                st.write(f"**{i+1}.** [{seg['start']:.1f}s - {seg['end']:.1f}s] {seg['text']}")
+                            if len(segments) > 5:
+                                st.write(f"... and {len(segments) - 5} more segments")
+                    else:
+                        st.warning("No speech segments detected. Try adjusting audio volume or check for background noise.")
+
+                except Exception as e:
                         st.error(f"Transcription failed: {str(e)}")
                         # Show detailed error information
                         with st.expander("Debug Information"):
