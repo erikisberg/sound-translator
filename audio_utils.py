@@ -178,32 +178,44 @@ def transcribe_file(audio_path: str, working_dir: Path) -> List[Dict[str, Any]]:
         # Convert to list format with additional validation
         logger.info("Converting segments to list format")
         segment_list = []
+        segment_count = 0
         for segment in segments:
-            text = segment.text.strip()
-            # Only include segments with actual speech content
-            if text and len(text) > 1:  # Skip very short or empty segments
-                segment_data = {
-                    "start": round(segment.start, 3),
-                    "end": round(segment.end, 3),
-                    "text": text
-                }
+            try:
+                segment_count += 1
+                if segment_count % 10 == 0:  # Log every 10th segment to avoid spam
+                    logger.info(f"Processing segment {segment_count}...")
 
-                # Add word-level data if available (optional)
-                try:
-                    if hasattr(segment, 'words') and segment.words:
-                        segment_data["words"] = [
-                            {
-                                "start": round(word.start, 3),
-                                "end": round(word.end, 3),
-                                "word": word.word,
-                                "probability": round(word.probability, 3) if hasattr(word, 'probability') else None
-                            }
-                            for word in segment.words
-                        ]
-                except Exception as word_error:
-                    logger.debug(f"Word-level timestamps not available: {word_error}")
+                text = segment.text.strip()
 
-                segment_list.append(segment_data)
+                # Only include segments with actual speech content
+                if text and len(text) > 1:  # Skip very short or empty segments
+                    segment_data = {
+                        "start": round(segment.start, 3),
+                        "end": round(segment.end, 3),
+                        "text": text
+                    }
+
+                    # Add word-level data if available (optional)
+                    try:
+                        if hasattr(segment, 'words') and segment.words:
+                            segment_data["words"] = [
+                                {
+                                    "start": round(word.start, 3),
+                                    "end": round(word.end, 3),
+                                    "word": word.word,
+                                    "probability": round(word.probability, 3) if hasattr(word, 'probability') else None
+                                }
+                                for word in segment.words
+                            ]
+                    except Exception as word_error:
+                        logger.debug(f"Word-level timestamps not available: {word_error}")
+
+                    segment_list.append(segment_data)
+
+            except Exception as seg_error:
+                logger.error(f"Error processing segment {segment_count}: {seg_error}", exc_info=True)
+                # Continue processing other segments instead of crashing
+                continue
         
         # Log transcription info
         logger.info(f"Transcription completed: {len(segment_list)} segments detected")
