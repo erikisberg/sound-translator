@@ -6,6 +6,7 @@ import os
 import json
 import base64
 import logging
+import gc
 import numpy as np
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -200,20 +201,13 @@ def transcribe_file(audio_path: str, working_dir: Path) -> List[Dict[str, Any]]:
                         "text": text
                     }
 
-                    # Add word-level data if available (optional)
-                    try:
-                        if hasattr(segment, 'words') and segment.words:
-                            segment_data["words"] = [
-                                {
-                                    "start": round(word.start, 3),
-                                    "end": round(word.end, 3),
-                                    "word": word.word,
-                                    "probability": round(word.probability, 3) if hasattr(word, 'probability') else None
-                                }
-                                for word in segment.words
-                            ]
-                    except Exception as word_error:
-                        logger.debug(f"Word-level timestamps not available: {word_error}")
+                    # Skip word-level data to save memory (critical for Streamlit Cloud)
+                    # Word-level timestamps take significant RAM and aren't needed for basic functionality
+                    # try:
+                    #     if hasattr(segment, 'words') and segment.words:
+                    #         segment_data["words"] = [...]
+                    # except Exception as word_error:
+                    #     logger.debug(f"Word-level timestamps not available: {word_error}")
 
                     segment_list.append(segment_data)
 
@@ -221,7 +215,11 @@ def transcribe_file(audio_path: str, working_dir: Path) -> List[Dict[str, Any]]:
                 logger.error(f"Error processing segment {segment_count}: {seg_error}", exc_info=True)
                 # Continue processing other segments instead of crashing
                 continue
-        
+
+        # Force garbage collection to free memory (critical for Streamlit Cloud)
+        gc.collect()
+        logger.info(f"Memory cleanup completed after processing {segment_count} segments")
+
         # Log transcription info
         logger.info(f"Transcription completed: {len(segment_list)} segments detected")
         logger.info(f"Language detected: {info.language} (probability: {info.language_probability:.2f})")
