@@ -78,8 +78,7 @@ def transcribe_file(audio_path: str, working_dir: Path, model_name: str = "large
             segments, info = model.transcribe(
                 processed_audio_path,
                 language="sv",  # Swedish
-                beam_size=5,
-                best_of=5,
+                beam_size=1,  # Optimized for speed (was 5)
                 temperature=0.0,
                 # Disable VAD to capture all audio content
                 vad_filter=False,
@@ -97,7 +96,7 @@ def transcribe_file(audio_path: str, working_dir: Path, model_name: str = "large
             segments, info = model.transcribe(
                 processed_audio_path,
                 language="sv",  # Swedish
-                beam_size=5,
+                beam_size=1,  # Optimized for speed (was 5)
                 temperature=0.0,
                 vad_filter=False,  # Disable VAD to capture all content
                 no_speech_threshold=0.4
@@ -551,10 +550,6 @@ def stitch_segments(
     print("Normalizing audio segments for consistent volume...")
     final_audio = normalize_audio_segments(final_audio, audio_segments)
 
-    # Apply professional podcast mastering (LUFS normalization, limiting, etc.)
-    print("\nApplying professional podcast mastering...")
-    final_audio = apply_podcast_mastering(final_audio, target_lufs=-16.0)
-
     # Calculate final duration
     final_duration_s = len(final_audio) / 1000
     print(f"\nFinal audio duration: {final_duration_s:.1f}s ({final_duration_s/60:.1f} minutes)")
@@ -601,131 +596,6 @@ def normalize_audio_segments(final_audio: AudioSegment, audio_segments: List[Dic
     except Exception as e:
         print(f"Normalization failed, using original audio: {e}")
         return final_audio
-
-
-def apply_podcast_mastering(audio: AudioSegment, target_lufs: float = -16.0) -> AudioSegment:
-    """
-    Apply professional podcast mastering chain for broadcast-quality audio.
-
-    Implements industry-standard mastering for podcast/streaming platforms:
-    - LUFS loudness normalization (-16 LUFS for podcasts/Spotify)
-    - High-pass filter (removes rumble below 80Hz)
-    - Multi-stage compression for consistency
-    - True peak limiting to prevent clipping
-
-    Args:
-        audio: Input audio segment to master
-        target_lufs: Target loudness in LUFS (default -16.0 for podcasts)
-
-    Returns:
-        Mastered audio segment
-    """
-    try:
-        print(f"Applying professional podcast mastering (target: {target_lufs} LUFS)...")
-
-        # Step 1: High-pass filter to remove rumble and room noise
-        print("  → Applying high-pass filter (80Hz)...")
-        mastered = audio.high_pass_filter(80)
-
-        # Step 2: LUFS loudness normalization (industry standard)
-        print(f"  → Normalizing to {target_lufs} LUFS...")
-        mastered = normalize_loudness_lufs(mastered, target_lufs=target_lufs)
-
-        # Step 3: Multi-stage compression for professional sound
-        print("  → Applying multi-stage compression...")
-        # Stage 1: Gentle compression for consistency
-        mastered = mastered.compress_dynamic_range(
-            threshold=-18.0,
-            ratio=2.5,
-            attack=5.0,
-            release=100.0
-        )
-
-        # Step 4: Peak limiting to prevent clipping (-1.0 dBTP standard)
-        print("  → Applying peak limiting (-1.0 dBTP)...")
-        mastered = apply_peak_limiter(mastered, threshold_db=-1.0)
-
-        print("✓ Podcast mastering completed successfully")
-        return mastered
-
-    except Exception as e:
-        print(f"Warning: Podcast mastering failed ({e}), using basic normalization")
-        return audio.normalize()
-
-
-def normalize_loudness_lufs(audio: AudioSegment, target_lufs: float = -16.0) -> AudioSegment:
-    """
-    Normalize audio to target LUFS (Loudness Units relative to Full Scale).
-
-    LUFS is the industry standard for measuring perceived loudness:
-    - Podcasts/Spotify: -16 LUFS
-    - YouTube/Social: -14 LUFS
-    - Broadcast: -23 LUFS
-
-    Args:
-        audio: Input audio
-        target_lufs: Target loudness in LUFS
-
-    Returns:
-        Loudness-normalized audio
-    """
-    try:
-        # Convert AudioSegment to numpy array
-        samples = np.array(audio.get_array_of_samples())
-
-        # Handle stereo: reshape to 2D array
-        if audio.channels == 2:
-            samples = samples.reshape((-1, 2))
-
-        # Convert to float32 and normalize to [-1, 1] range
-        samples = samples.astype(np.float32) / (2 ** (audio.sample_width * 8 - 1))
-
-        # Measure current loudness
-        meter = pyln.Meter(audio.frame_rate)
-        current_lufs = meter.integrated_loudness(samples)
-
-        # Calculate required gain
-        gain_db = target_lufs - current_lufs
-
-        print(f"    Current: {current_lufs:.1f} LUFS → Target: {target_lufs:.1f} LUFS (gain: {gain_db:+.1f} dB)")
-
-        # Apply gain
-        return audio + gain_db
-
-    except Exception as e:
-        print(f"    LUFS normalization failed ({e}), using peak normalization")
-        return audio.normalize()
-
-
-def apply_peak_limiter(audio: AudioSegment, threshold_db: float = -1.0) -> AudioSegment:
-    """
-    Apply true peak limiting to prevent clipping on all playback devices.
-
-    True Peak limiting ensures audio stays below threshold even after
-    digital-to-analog conversion. Standard: -1.0 dBTP for streaming.
-
-    Args:
-        audio: Input audio
-        threshold_db: Peak threshold in dB (default -1.0 for streaming)
-
-    Returns:
-        Peak-limited audio
-    """
-    try:
-        # Get current peak level
-        current_peak_db = audio.max_dBFS
-
-        # If audio exceeds threshold, reduce gain
-        if current_peak_db > threshold_db:
-            reduction_db = current_peak_db - threshold_db
-            print(f"    Reducing peaks by {reduction_db:.1f} dB (current: {current_peak_db:.1f} dBFS)")
-            return audio - reduction_db
-
-        return audio
-
-    except Exception as e:
-        print(f"    Peak limiting failed ({e}), skipping")
-        return audio
 
 
 def translate_text_deepl(text: str, target_lang: str = "EN-US") -> str:
