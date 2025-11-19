@@ -36,9 +36,9 @@ def get_whisper_model(model_name: str) -> WhisperModel:
     """
     device = "cpu"
     compute_type = "int8"
-    logger.info(f"Loading Whisper model: {model_name} (device: {device}, compute_type: {compute_type})")
+    logger.info(f"⚠️ CACHE MISS - Loading Whisper model from disk: {model_name} (device: {device}, compute_type: {compute_type})")
     model = WhisperModel(model_name, device=device, compute_type=compute_type)
-    logger.info(f"Whisper model '{model_name}' loaded successfully and cached")
+    logger.info(f"✅ Whisper model '{model_name}' loaded successfully and cached for future use")
     return model
 
 
@@ -60,14 +60,14 @@ def preprocess_audio(audio_path: str, working_dir: Path) -> str:
     return audio_path
 
 
-def transcribe_file(audio_path: str, working_dir: Path, model_name: str = "large-v3") -> List[Dict[str, Any]]:
+def transcribe_file(audio_path: str, working_dir: Path, model_name: str = "large-v3-turbo") -> List[Dict[str, Any]]:
     """
     Transcribe audio file using faster-whisper with improved speech detection.
 
     Args:
         audio_path: Path to audio file
         working_dir: Directory for intermediate files
-        model_name: Whisper model to use (default: large-v3)
+        model_name: Whisper model to use (default: large-v3-turbo)
 
     Returns:
         List of segments with start, end, text
@@ -84,8 +84,10 @@ def transcribe_file(audio_path: str, working_dir: Path, model_name: str = "large
 
     try:
         # Use cached model - prevents memory leaks and improves performance
+        logger.info(f"Requesting Whisper model '{model_name}' from cache...")
         model = get_whisper_model(model_name)
-        
+        logger.info(f"✅ Got model '{model_name}' (cached or freshly loaded)")
+
         # Start with basic transcription settings that are known to work
         try:
             # Try with advanced settings first

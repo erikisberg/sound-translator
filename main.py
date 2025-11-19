@@ -124,8 +124,8 @@ def main():
         whisper_model = st.selectbox(
             "Whisper Model",
             options=[
-                "large-v3",        # Best quality (default)
-                "large-v3-turbo",  # Best quality, faster
+                "large-v3-turbo",  # Best quality, faster (default)
+                "large-v3",        # Best quality
                 "medium",          # Good balance
                 "small",           # OK quality, faster
                 "base",            # Basic, fast
@@ -370,7 +370,7 @@ def main():
                         st.write("Loading Whisper model...")
 
                         # Get selected model from session state
-                        model_name = st.session_state.get('whisper_model', 'large-v3')
+                        model_name = st.session_state.get('whisper_model', 'large-v3-turbo')
 
                         # Transcribe with selected model
                         segments = transcribe_file(
