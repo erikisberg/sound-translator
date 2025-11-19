@@ -492,13 +492,17 @@ def stitch_segments(
     current_position_ms = 0
 
     print(f"Stitching {len(segments)} segments with {crossfade_duration_ms}ms crossfading...")
-    
-    # Collect all audio segments for normalization
-    audio_segments = []
-    
+
+    # Track max volume for normalization (replaces audio_segments array to save memory)
+    max_volume_db = float('-inf')
+
     for i, (segment, audio_file) in enumerate(zip(segments, audio_files)):
         # Load generated audio directly (skip per-segment enhancement to prevent artifacts)
         generated_audio = AudioSegment.from_file(audio_file)
+
+        # Track max volume for normalization (avoids storing all audio twice)
+        if generated_audio.max_dBFS > float('-inf'):
+            max_volume_db = max(max_volume_db, generated_audio.max_dBFS)
         
         # Calculate timing - use start time only
         segment_start_ms = int(segment["start"] * 1000)
@@ -551,19 +555,12 @@ def stitch_segments(
         else:
             # Simple concatenation for first segment or when there's a significant gap
             final_audio += generated_audio
-        
-        # Store segment info for normalization
-        audio_segments.append({
-            'audio': generated_audio,
-            'start_ms': segment_start_ms,
-            'index': i
-        })
-        
+
         print(f"Segment {i+1}: starts at {segment['start']:.1f}s, TTS duration: {len(generated_audio)/1000:.1f}s, total audio length: {len(final_audio)/1000:.1f}s")
-    
+
     # Normalize all segments for consistent volume
     print("Normalizing audio segments for consistent volume...")
-    final_audio = normalize_audio_segments(final_audio, audio_segments)
+    final_audio = normalize_audio_segments(final_audio, max_volume_db)
 
     # Calculate final duration
     final_duration_s = len(final_audio) / 1000
@@ -576,27 +573,26 @@ def stitch_segments(
     return output_path
 
 
-def normalize_audio_segments(final_audio: AudioSegment, audio_segments: List[Dict]) -> AudioSegment:
+def normalize_audio_segments(final_audio: AudioSegment, max_volume_db: float) -> AudioSegment:
     """
-    Normalize audio segments to have consistent volume levels.
-    
+    Normalize audio to have consistent volume levels.
+
     Args:
         final_audio: The complete audio to normalize
-        audio_segments: List of segment information
-        
+        max_volume_db: Maximum volume level in dB from all segments
+
     Returns:
         Normalized audio segment
     """
     try:
-        # Calculate target volume (use the loudest segment as reference)
-        max_volume = max(seg['audio'].max_dBFS for seg in audio_segments)
-        target_volume = max_volume - 3  # 3dB below max to prevent clipping
-        
-        print(f"Target volume: {target_volume:.1f}dB")
-        
+        # Calculate target volume (3dB below max to prevent clipping)
+        target_volume = max_volume_db - 3
+
+        print(f"Target volume: {target_volume:.1f}dB (max: {max_volume_db:.1f}dB)")
+
         # Normalize the entire audio
         normalized_audio = final_audio.normalize()
-        
+
         # Apply gentle compression to even out volume levels (reduced ratio to prevent artifacts)
         normalized_audio = normalized_audio.compress_dynamic_range(
             threshold=-20.0,
@@ -604,7 +600,7 @@ def normalize_audio_segments(final_audio: AudioSegment, audio_segments: List[Dic
             attack=5.0,
             release=50.0
         )
-        
+
         print("Audio normalization completed")
         return normalized_audio
 

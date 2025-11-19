@@ -6,6 +6,9 @@ Transcribe Swedish audio → Translate to English → Generate English TTS
 import streamlit as st
 import os
 import tempfile
+import atexit
+import shutil
+import logging
 from pathlib import Path
 from typing import List, Dict, Any
 import pandas as pd
@@ -17,6 +20,9 @@ from audio_utils import (
     generate_tts,
     stitch_segments
 )
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -39,6 +45,19 @@ def init_session_state() -> None:
     if "working_dir" not in st.session_state:
         st.session_state.working_dir = Path(tempfile.mkdtemp(prefix="audio_translator_"))
         st.session_state.working_dir.mkdir(exist_ok=True)
+
+        # Register cleanup handler to remove temp directory on exit
+        def cleanup_working_dir():
+            """Remove temporary working directory and all its contents."""
+            try:
+                working_dir = st.session_state.working_dir
+                if working_dir.exists():
+                    shutil.rmtree(working_dir, ignore_errors=True)
+                    logger.info(f"Cleaned up temp directory: {working_dir}")
+            except Exception as e:
+                logger.error(f"Failed to cleanup temp directory: {e}")
+
+        atexit.register(cleanup_working_dir)
 
 def create_segments_dataframe(segments: List[Dict[str, Any]]) -> pd.DataFrame:
     """Create a DataFrame from segments for editing."""
