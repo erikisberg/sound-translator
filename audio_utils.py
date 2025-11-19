@@ -6,13 +6,16 @@ import os
 import json
 import logging
 import gc
+import time
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable, TypeVar
 import httpx
 from openai import OpenAI
 from faster_whisper import WhisperModel
 from pydub import AudioSegment
 import streamlit as st
+
+T = TypeVar('T')
 
 # Configure logging
 logging.basicConfig(
@@ -20,6 +23,52 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def retry_with_backoff(
+    func: Callable[[], T],
+    max_retries: int = 3,
+    initial_delay: float = 1.0,
+    backoff_factor: float = 2.0,
+    operation_name: str = "operation"
+) -> T:
+    """
+    Retry a function with exponential backoff on failure.
+
+    Args:
+        func: Function to retry (should take no arguments, use lambda if needed)
+        max_retries: Maximum number of retry attempts (default: 3)
+        initial_delay: Initial delay in seconds before first retry (default: 1.0)
+        backoff_factor: Multiplier for delay after each retry (default: 2.0)
+        operation_name: Name of operation for logging
+
+    Returns:
+        Result of successful function call
+
+    Raises:
+        Last exception if all retries fail
+    """
+    delay = initial_delay
+    last_exception = None
+
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as e:
+            last_exception = e
+            if attempt < max_retries - 1:
+                logger.warning(f"{operation_name} failed (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {delay:.1f}s...")
+                time.sleep(delay)
+                delay *= backoff_factor
+            else:
+                logger.error(f"{operation_name} failed after {max_retries} attempts: {str(e)}")
+        except Exception as e:
+            # For non-network errors, don't retry
+            logger.error(f"{operation_name} failed with non-retryable error: {str(e)}")
+            raise
+
+    # If we get here, all retries failed
+    raise last_exception
 
 
 @st.cache_resource
@@ -232,7 +281,7 @@ def translate_segments(
 
 
 def _translate_with_deepl(segments: List[Dict[str, Any]], working_dir: Path) -> List[Dict[str, Any]]:
-    """Translate using DeepL API."""
+    """Translate using DeepL API with retry logic and connection reuse."""
     logger.info("Using DeepL for translation")
     api_key = os.getenv("DEEPL_API_KEY")
     if not api_key:
@@ -244,30 +293,40 @@ def _translate_with_deepl(segments: List[Dict[str, Any]], working_dir: Path) -> 
 
     translated_segments = []
 
-    for i, segment in enumerate(segments):
-        try:
-            logger.debug(f"Translating segment {i+1}/{len(segments)}")
-            data = {
-                "text": segment["text"],
-                "source_lang": "SV",
-                "target_lang": "EN-US",
-                "preserve_formatting": "1"
-            }
+    # Reuse HTTP client for all requests (better performance and reliability)
+    with httpx.Client(timeout=30.0) as client:
+        for i, segment in enumerate(segments):
+            try:
+                logger.debug(f"Translating segment {i+1}/{len(segments)}")
+                data = {
+                    "text": segment["text"],
+                    "source_lang": "SV",
+                    "target_lang": "EN-US",
+                    "preserve_formatting": "1"
+                }
 
-            with httpx.Client() as client:
-                response = client.post(url, headers=headers, data=data)
-                response.raise_for_status()
+                # Use retry with exponential backoff for network resilience
+                def translate_request():
+                    response = client.post(url, headers=headers, data=data)
+                    response.raise_for_status()
+                    return response.json()
 
-                result = response.json()
+                result = retry_with_backoff(
+                    translate_request,
+                    max_retries=3,
+                    initial_delay=1.0,
+                    operation_name=f"DeepL translation (segment {i+1}/{len(segments)})"
+                )
+
                 english_text = result["translations"][0]["text"]
 
                 translated_segment = segment.copy()
                 translated_segment["english"] = english_text
                 translated_segments.append(translated_segment)
 
-        except Exception as e:
-            logger.error(f"DeepL translation failed for segment {i}: {str(e)}", exc_info=True)
-            raise RuntimeError(f"DeepL translation failed for segment {i}: {str(e)}")
+            except Exception as e:
+                logger.error(f"DeepL translation failed for segment {i}: {str(e)}", exc_info=True)
+                raise RuntimeError(f"DeepL translation failed for segment {i}: {str(e)}")
 
     # Save translations
     translation_path = working_dir / "translations.json"
@@ -387,63 +446,74 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
     previous_texts = []
     previous_request_ids = []
 
-    for i, segment in enumerate(segments):
-        logger.info(f"Processing segment {i+1}/{len(segments)}")
-        english_text = segment.get("english", "").strip()
-        if not english_text:
-            # Create silent audio for empty segments
-            logger.debug(f"Segment {i+1} has no text, creating silent audio")
-            duration_ms = int((segment["end"] - segment["start"]) * 1000)
-            silent_audio = AudioSegment.silent(duration=duration_ms)
-            file_path = tts_dir / f"segment_{i:03d}.wav"
-            silent_audio.export(file_path, format="wav")
-            audio_files.append(file_path)
-            continue
-        
-        # Limit text length for API (ElevenLabs recommends <900 chars for best consistency)
-        if len(english_text.split()) > 400:
-            english_text = ' '.join(english_text.split()[:400])
+    # Reuse HTTP client for all requests (better performance and reliability)
+    with httpx.Client(timeout=30.0) as client:
+        for i, segment in enumerate(segments):
+            logger.info(f"Processing segment {i+1}/{len(segments)}")
+            english_text = segment.get("english", "").strip()
+            if not english_text:
+                # Create silent audio for empty segments
+                logger.debug(f"Segment {i+1} has no text, creating silent audio")
+                duration_ms = int((segment["end"] - segment["start"]) * 1000)
+                silent_audio = AudioSegment.silent(duration=duration_ms)
+                file_path = tts_dir / f"segment_{i:03d}.wav"
+                silent_audio.export(file_path, format="wav")
+                audio_files.append(file_path)
+                continue
 
-        try:
-            # Build request data with ElevenLabs best practices for consistency
-            data = {
-                "text": english_text,
-                "model_id": voice_model,
-                "voice_settings": {
-                    "stability": stability,
-                    "similarity_boost": similarity_boost,
-                    "style": style,
-                    "use_speaker_boost": use_speaker_boost
-                },
-                "output_format": "mp3_44100_128",  # High quality output
-                "apply_text_normalization": "auto"  # Automatic text normalization
-            }
+            # Limit text length for API (ElevenLabs recommends <900 chars for best consistency)
+            if len(english_text.split()) > 400:
+                english_text = ' '.join(english_text.split()[:400])
 
-            # Add request stitching for voice consistency (official ElevenLabs feature)
-            # Note: Request stitching does NOT work with eleven_v3 model
-            if use_request_stitching and "v3" not in voice_model.lower():
-                # Add previous_text context for prosody continuity
-                if previous_texts and context_window_size > 0:
-                    context_segments = previous_texts[-context_window_size:]
-                    data["previous_text"] = " ".join(context_segments)
+            try:
+                # Build request data with ElevenLabs best practices for consistency
+                data = {
+                    "text": english_text,
+                    "model_id": voice_model,
+                    "voice_settings": {
+                        "stability": stability,
+                        "similarity_boost": similarity_boost,
+                        "style": style,
+                        "use_speaker_boost": use_speaker_boost
+                    },
+                    "output_format": "mp3_44100_128",  # High quality output
+                    "apply_text_normalization": "auto"  # Automatic text normalization
+                }
 
-                # Add previous_request_ids for even better consistency
-                if previous_request_ids:
-                    # Use last N request IDs (requests must be <2 hours old)
-                    data["previous_request_ids"] = previous_request_ids[-context_window_size:]
-            
-            # Add speed control for supported models
-            # Note: Not all models support speed parameter
-            # Safe models: eleven_turbo_v2_5, eleven_flash_v2_5, eleven_multilingual_v2
-            if voice_model in ["eleven_turbo_v2_5", "eleven_flash_v2_5", "eleven_multilingual_v2", "eleven_multilingual_v2_5"]:
-                # Speed control: Valid range is 0.7-1.2 (1.0 = normal, 0.7 = slowest, 1.2 = fastest)
-                speed = max(0.7, min(1.2, speaking_rate))
-                data["voice_settings"]["speed"] = speed
-                logger.info(f"Using speed={speed} for model {voice_model}")
-            
-            with httpx.Client(timeout=30.0) as client:
-                response = client.post(url, headers=headers, json=data)
-                response.raise_for_status()
+                # Add request stitching for voice consistency (official ElevenLabs feature)
+                # Note: Request stitching does NOT work with eleven_v3 model
+                if use_request_stitching and "v3" not in voice_model.lower():
+                    # Add previous_text context for prosody continuity
+                    if previous_texts and context_window_size > 0:
+                        context_segments = previous_texts[-context_window_size:]
+                        data["previous_text"] = " ".join(context_segments)
+
+                    # Add previous_request_ids for even better consistency
+                    if previous_request_ids:
+                        # Use last N request IDs (requests must be <2 hours old)
+                        data["previous_request_ids"] = previous_request_ids[-context_window_size:]
+
+                # Add speed control for supported models
+                # Note: Not all models support speed parameter
+                # Safe models: eleven_turbo_v2_5, eleven_flash_v2_5, eleven_multilingual_v2
+                if voice_model in ["eleven_turbo_v2_5", "eleven_flash_v2_5", "eleven_multilingual_v2", "eleven_multilingual_v2_5"]:
+                    # Speed control: Valid range is 0.7-1.2 (1.0 = normal, 0.7 = slowest, 1.2 = fastest)
+                    speed = max(0.7, min(1.2, speaking_rate))
+                    data["voice_settings"]["speed"] = speed
+                    logger.info(f"Using speed={speed} for model {voice_model}")
+
+                # Use retry with exponential backoff for network resilience
+                def tts_request():
+                    response = client.post(url, headers=headers, json=data)
+                    response.raise_for_status()
+                    return response
+
+                response = retry_with_backoff(
+                    tts_request,
+                    max_retries=3,
+                    initial_delay=1.0,
+                    operation_name=f"ElevenLabs TTS (segment {i+1}/{len(segments)})"
+                )
 
                 # Extract request-id from response headers for request stitching
                 request_id = response.headers.get("request-id")
@@ -463,9 +533,9 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
                 if use_request_stitching:
                     previous_texts.append(english_text)
 
-        except Exception as e:
-            logger.error(f"TTS generation failed for segment {i}: {str(e)}", exc_info=True)
-            raise RuntimeError(f"TTS generation failed for segment {i}: {str(e)}")
+            except Exception as e:
+                logger.error(f"TTS generation failed for segment {i}: {str(e)}", exc_info=True)
+                raise RuntimeError(f"TTS generation failed for segment {i}: {str(e)}")
 
     logger.info(f"TTS generation completed successfully for all {len(audio_files)} segments")
     return audio_files
