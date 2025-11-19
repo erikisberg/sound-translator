@@ -12,6 +12,7 @@ import httpx
 from openai import OpenAI
 from faster_whisper import WhisperModel
 from pydub import AudioSegment
+import streamlit as st
 
 # Configure logging
 logging.basicConfig(
@@ -19,6 +20,26 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+@st.cache_resource
+def get_whisper_model(model_name: str) -> WhisperModel:
+    """
+    Load and cache Whisper model to avoid reloading on every transcription.
+    This prevents memory leaks and improves performance significantly.
+
+    Args:
+        model_name: Name of the Whisper model (e.g., 'large-v3', 'medium', 'small')
+
+    Returns:
+        Cached WhisperModel instance
+    """
+    device = "cpu"
+    compute_type = "int8"
+    logger.info(f"Loading Whisper model: {model_name} (device: {device}, compute_type: {compute_type})")
+    model = WhisperModel(model_name, device=device, compute_type=compute_type)
+    logger.info(f"Whisper model '{model_name}' loaded successfully and cached")
+    return model
 
 
 def preprocess_audio(audio_path: str, working_dir: Path) -> str:
@@ -39,14 +60,14 @@ def preprocess_audio(audio_path: str, working_dir: Path) -> str:
     return audio_path
 
 
-def transcribe_file(audio_path: str, working_dir: Path, model_name: str = "large-v3-turbo") -> List[Dict[str, Any]]:
+def transcribe_file(audio_path: str, working_dir: Path, model_name: str = "large-v3") -> List[Dict[str, Any]]:
     """
     Transcribe audio file using faster-whisper with improved speech detection.
 
     Args:
         audio_path: Path to audio file
         working_dir: Directory for intermediate files
-        model_name: Whisper model to use (default: large-v3-turbo)
+        model_name: Whisper model to use (default: large-v3)
 
     Returns:
         List of segments with start, end, text
@@ -61,15 +82,9 @@ def transcribe_file(audio_path: str, working_dir: Path, model_name: str = "large
         logger.error(f"Audio preprocessing failed: {e}", exc_info=True)
         raise
 
-    # Always use CPU (Streamlit Cloud doesn't have GPU)
-    device = "cpu"
-    compute_type = "int8"
-    logger.info(f"Using device: {device}, compute_type: {compute_type}")
-
     try:
-        logger.info(f"Loading Whisper model: {model_name}")
-        model = WhisperModel(model_name, device=device, compute_type=compute_type)
-        logger.info(f"Whisper model '{model_name}' loaded successfully")
+        # Use cached model - prevents memory leaks and improves performance
+        model = get_whisper_model(model_name)
         
         # Start with basic transcription settings that are known to work
         try:

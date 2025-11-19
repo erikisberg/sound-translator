@@ -105,23 +105,25 @@ def main():
         whisper_model = st.selectbox(
             "Whisper Model",
             options=[
-                "large-v3-turbo",  # Best quality, slowest
-                "medium",          # Good balance, 2x faster
-                "small",           # OK quality, 3x faster
-                "base",            # Basic, 5x faster
-                "tiny"             # Fastest, 8x faster
+                "large-v3",        # Best quality (default)
+                "large-v3-turbo",  # Best quality, faster
+                "medium",          # Good balance
+                "small",           # OK quality, faster
+                "base",            # Basic, fast
+                "tiny"             # Fastest
             ],
-            index=1,
-            help="Choose transcription speed vs quality trade-off"
+            index=0,
+            help="Choose transcription speed vs quality trade-off. Model is cached and reused for better performance."
         )
 
         # Model info
         model_info = {
-            "large-v3-turbo": "Best quality, ~1.5GB, slowest",
-            "medium": "Good balance, ~770MB, 2x faster",
-            "small": "OK quality, ~490MB, 3x faster",
-            "base": "Basic, ~140MB, 5x faster",
-            "tiny": "Fastest, ~75MB, 8x faster"
+            "large-v3": "Best quality, ~1.5GB (cached after first load)",
+            "large-v3-turbo": "Best quality optimized, ~1.5GB, faster inference",
+            "medium": "Good balance, ~770MB",
+            "small": "OK quality, ~490MB",
+            "base": "Basic, ~140MB",
+            "tiny": "Fastest, ~75MB"
         }
         st.info(f"**{whisper_model}**: {model_info[whisper_model]}")
 
@@ -349,7 +351,7 @@ def main():
                         st.write("Loading Whisper model...")
 
                         # Get selected model from session state
-                        model_name = st.session_state.get('whisper_model', 'large-v3-turbo')
+                        model_name = st.session_state.get('whisper_model', 'large-v3')
 
                         # Transcribe with selected model
                         segments = transcribe_file(
