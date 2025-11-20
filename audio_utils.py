@@ -62,8 +62,32 @@ def retry_with_backoff(
                 delay *= backoff_factor
             else:
                 logger.error(f"{operation_name} failed after {max_retries} attempts: {str(e)}")
+        except httpx.HTTPStatusError as e:
+            # Handle rate limiting (429) and server errors (5xx) with retry
+            if e.response.status_code == 429:
+                # Rate limiting - use longer backoff
+                rate_limit_delay = 5.0 * (backoff_factor ** attempt)  # 5s, 10s, 20s
+                last_exception = e
+                if attempt < max_retries - 1:
+                    logger.warning(f"{operation_name} rate limited (429). Retrying in {rate_limit_delay:.1f}s...")
+                    time.sleep(rate_limit_delay)
+                else:
+                    logger.error(f"{operation_name} rate limited after {max_retries} attempts")
+            elif e.response.status_code >= 500:
+                # Server errors - retry with normal backoff
+                last_exception = e
+                if attempt < max_retries - 1:
+                    logger.warning(f"{operation_name} server error ({e.response.status_code}). Retrying in {delay:.1f}s...")
+                    time.sleep(delay)
+                    delay *= backoff_factor
+                else:
+                    logger.error(f"{operation_name} server error after {max_retries} attempts: {str(e)}")
+            else:
+                # Other HTTP errors (4xx) - don't retry
+                logger.error(f"{operation_name} failed with non-retryable HTTP error: {str(e)}")
+                raise
         except Exception as e:
-            # For non-network errors, don't retry
+            # For other non-network errors, don't retry
             logger.error(f"{operation_name} failed with non-retryable error: {str(e)}")
             raise
 
@@ -323,6 +347,11 @@ def _translate_with_deepl(segments: List[Dict[str, Any]], working_dir: Path) -> 
                 translated_segment = segment.copy()
                 translated_segment["english"] = english_text
                 translated_segments.append(translated_segment)
+
+                # Rate limiting: Add delay to stay under DeepL Free API limits (~3 req/s)
+                # This prevents hitting 429 Too Many Requests errors
+                if i < len(segments) - 1:  # Don't delay after last segment
+                    time.sleep(0.3)  # Max ~3 requests/second
 
             except Exception as e:
                 logger.error(f"DeepL translation failed for segment {i}: {str(e)}", exc_info=True)
