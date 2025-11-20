@@ -215,9 +215,9 @@ def _call_openai_whisper_api(audio_path: str, language: str = "sv") -> List[Dict
     if hasattr(response, 'segments') and response.segments:
         for seg in response.segments:
             segments.append({
-                "start": round(float(seg['start']), 3),
-                "end": round(float(seg['end']), 3),
-                "text": seg['text'].strip()
+                "start": round(float(seg.start), 3),
+                "end": round(float(seg.end), 3),
+                "text": seg.text.strip()
             })
         logger.info(f"OpenAI Whisper API returned {len(segments)} segments")
     else:
