@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable, TypeVar
 import httpx
 from openai import OpenAI
+from openai import APIConnectionError, APITimeoutError, RateLimitError, APIStatusError
 from faster_whisper import WhisperModel
 from pydub import AudioSegment
 import streamlit as st
@@ -54,7 +55,8 @@ def retry_with_backoff(
     for attempt in range(max_retries):
         try:
             return func()
-        except (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as e:
+        except (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError,
+                APIConnectionError, APITimeoutError) as e:
             last_exception = e
             if attempt < max_retries - 1:
                 logger.warning(f"{operation_name} failed (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {delay:.1f}s...")
@@ -62,6 +64,15 @@ def retry_with_backoff(
                 delay *= backoff_factor
             else:
                 logger.error(f"{operation_name} failed after {max_retries} attempts: {str(e)}")
+        except RateLimitError as e:
+            # OpenAI rate limiting - use longer backoff
+            rate_limit_delay = 5.0 * (backoff_factor ** attempt)  # 5s, 10s, 20s
+            last_exception = e
+            if attempt < max_retries - 1:
+                logger.warning(f"{operation_name} rate limited (OpenAI). Retrying in {rate_limit_delay:.1f}s...")
+                time.sleep(rate_limit_delay)
+            else:
+                logger.error(f"{operation_name} rate limited after {max_retries} attempts")
         except httpx.HTTPStatusError as e:
             # Handle rate limiting (429) and server errors (5xx) with retry
             if e.response.status_code == 429:
@@ -85,6 +96,30 @@ def retry_with_backoff(
             else:
                 # Other HTTP errors (4xx) - don't retry
                 logger.error(f"{operation_name} failed with non-retryable HTTP error: {str(e)}")
+                raise
+        except APIStatusError as e:
+            # OpenAI API status errors (similar to HTTPStatusError)
+            if e.status_code == 429:
+                # Rate limiting
+                rate_limit_delay = 5.0 * (backoff_factor ** attempt)
+                last_exception = e
+                if attempt < max_retries - 1:
+                    logger.warning(f"{operation_name} rate limited (OpenAI 429). Retrying in {rate_limit_delay:.1f}s...")
+                    time.sleep(rate_limit_delay)
+                else:
+                    logger.error(f"{operation_name} rate limited after {max_retries} attempts")
+            elif e.status_code >= 500:
+                # Server errors
+                last_exception = e
+                if attempt < max_retries - 1:
+                    logger.warning(f"{operation_name} OpenAI server error ({e.status_code}). Retrying in {delay:.1f}s...")
+                    time.sleep(delay)
+                    delay *= backoff_factor
+                else:
+                    logger.error(f"{operation_name} OpenAI server error after {max_retries} attempts: {str(e)}")
+            else:
+                # Other status errors (4xx) - don't retry
+                logger.error(f"{operation_name} failed with non-retryable OpenAI status error: {str(e)}")
                 raise
         except Exception as e:
             # For other non-network errors, don't retry
