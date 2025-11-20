@@ -96,6 +96,12 @@ def main():
         eleven_key = st.secrets.get("ELEVEN_API_KEY") or os.getenv("ELEVEN_API_KEY")
         eleven_voice = st.secrets.get("ELEVEN_VOICE_ID") or os.getenv("ELEVEN_VOICE_ID")
         
+        st.write("**Transcription Service:**")
+        if openai_key:
+            st.success("OpenAI API Key found (Whisper API available)")
+        else:
+            st.warning("OpenAI API Key not found - only local transcription available")
+
         st.write("**Translation Service:**")
         if deepl_key:
             st.success("DeepL API Key found")
@@ -106,7 +112,7 @@ def main():
         else:
             st.error("No translation API key found")
             translation_service = None
-            
+
         st.write("**TTS Service:**")
         if eleven_key:
             st.success("ElevenLabs API Key found")
@@ -119,35 +125,56 @@ def main():
             
         st.write(f"**Working Directory:** `{st.session_state.working_dir}`")
 
-        # Whisper Model Selection
+        # Transcription Settings
         st.header("Transcription Settings")
-        whisper_model = st.selectbox(
-            "Whisper Model",
-            options=[
-                "large-v3-turbo",  # Best quality, faster (default)
-                "large-v3",        # Best quality
-                "medium",          # Good balance
-                "small",           # OK quality, faster
-                "base",            # Basic, fast
-                "tiny"             # Fastest
-            ],
-            index=0,
-            help="Choose transcription speed vs quality trade-off. Model is cached and reused for better performance."
+
+        # Transcription method selector
+        transcription_method = st.radio(
+            "Transcription Method",
+            options=["OpenAI API (Recommended)", "Local (Free)"],
+            index=0,  # Default to OpenAI API
+            help="OpenAI API provides better accuracy with fewer hallucinations ($0.006/min). Local is free but may have accuracy issues."
         )
 
-        # Model info
-        model_info = {
-            "large-v3": "Best quality, ~1.5GB (cached after first load)",
-            "large-v3-turbo": "Best quality optimized, ~1.5GB, faster inference",
-            "medium": "Good balance, ~770MB",
-            "small": "OK quality, ~490MB",
-            "base": "Basic, ~140MB",
-            "tiny": "Fastest, ~75MB"
-        }
-        st.info(f"**{whisper_model}**: {model_info[whisper_model]}")
+        use_openai_api = transcription_method == "OpenAI API (Recommended)"
+        st.session_state.use_openai_api = use_openai_api
 
-        # Store in session state
-        st.session_state.whisper_model = whisper_model
+        # Show cost estimate or free label
+        if use_openai_api:
+            st.success("**Using OpenAI Whisper API**: Best quality, no hallucinations")
+            st.info("**Cost**: ~$0.12 for 20-minute file ($0.006/minute)")
+            st.session_state.whisper_model = None  # Not used for API
+        else:
+            st.warning("**Using Local Whisper**: Free but may have hallucination issues")
+
+            # Show model selector only for local mode
+            whisper_model = st.selectbox(
+                "Local Whisper Model",
+                options=[
+                    "large-v3-turbo",  # Best quality, faster (default)
+                    "large-v3",        # Best quality
+                    "medium",          # Good balance
+                    "small",           # OK quality, faster
+                    "base",            # Basic, fast
+                    "tiny"             # Fastest
+                ],
+                index=0,
+                help="Choose transcription speed vs quality trade-off. Model is cached and reused for better performance."
+            )
+
+            # Model info
+            model_info = {
+                "large-v3": "Best quality, ~1.5GB (cached after first load)",
+                "large-v3-turbo": "Best quality optimized, ~1.5GB, faster inference",
+                "medium": "Good balance, ~770MB",
+                "small": "OK quality, ~490MB",
+                "base": "Basic, ~140MB",
+                "tiny": "Fastest, ~75MB"
+            }
+            st.info(f"**{whisper_model}**: {model_info[whisper_model]}")
+
+            # Store in session state
+            st.session_state.whisper_model = whisper_model
 
         # ElevenLabs Voice Settings
         if eleven_key and eleven_voice:
@@ -367,16 +394,21 @@ def main():
                 try:
                     # Use status container for better UX
                     with st.status("Transcribing audio...", expanded=True) as status:
-                        st.write("Loading Whisper model...")
+                        # Get transcription method from session state
+                        use_api = st.session_state.get('use_openai_api', False)
 
-                        # Get selected model from session state
-                        model_name = st.session_state.get('whisper_model', 'large-v3-turbo')
+                        if use_api:
+                            st.write("Using OpenAI Whisper API for transcription...")
+                        else:
+                            st.write("Loading local Whisper model...")
+                            model_name = st.session_state.get('whisper_model', 'large-v3-turbo')
 
-                        # Transcribe with selected model
+                        # Transcribe with selected method
                         segments = transcribe_file(
                             str(upload_path),
                             st.session_state.working_dir,
-                            model_name=model_name
+                            model_name=st.session_state.get('whisper_model', 'large-v3-turbo'),
+                            use_api=use_api
                         )
 
                         st.write(f"✓ Transcription complete! Found {len(segments)} segments")

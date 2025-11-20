@@ -133,19 +133,249 @@ def preprocess_audio(audio_path: str, working_dir: Path) -> str:
     return audio_path
 
 
-def transcribe_file(audio_path: str, working_dir: Path, model_name: str = "large-v3-turbo") -> List[Dict[str, Any]]:
+def _call_openai_whisper_api(audio_path: str, language: str = "sv") -> List[Dict[str, Any]]:
     """
-    Transcribe audio file using faster-whisper with improved speech detection.
+    Make a single API call to OpenAI Whisper.
+
+    Args:
+        audio_path: Path to audio file (<25MB)
+        language: ISO 639-1 language code (default: "sv" for Swedish)
+
+    Returns:
+        List of segments with start, end, text
+
+    Raises:
+        ValueError: If OPENAI_API_KEY not found
+        RuntimeError: If API call fails after retries
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        logger.error("OPENAI_API_KEY not found in environment")
+        raise ValueError("OPENAI_API_KEY not found. Please set it in .env or secrets.toml")
+
+    client = OpenAI(api_key=api_key)
+
+    def transcribe_request():
+        with open(audio_path, "rb") as audio_file:
+            response = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language=language,
+                response_format="verbose_json",  # Required for timestamps
+                timestamp_granularities=["segment"]  # Get segment-level timestamps
+            )
+        return response
+
+    # Use existing retry logic with longer delay for API calls
+    logger.info(f"Calling OpenAI Whisper API for: {audio_path}")
+    response = retry_with_backoff(
+        transcribe_request,
+        max_retries=3,
+        initial_delay=2.0,  # Longer for API calls
+        operation_name="OpenAI Whisper API transcription"
+    )
+
+    # Convert to same format as faster-whisper
+    segments = []
+    if hasattr(response, 'segments') and response.segments:
+        for seg in response.segments:
+            segments.append({
+                "start": round(float(seg['start']), 3),
+                "end": round(float(seg['end']), 3),
+                "text": seg['text'].strip()
+            })
+        logger.info(f"OpenAI Whisper API returned {len(segments)} segments")
+    else:
+        # Fallback if no segments (shouldn't happen with verbose_json)
+        logger.warning("No segments in API response, creating single segment from full text")
+        segments.append({
+            "start": 0.0,
+            "end": 0.0,
+            "text": response.text if hasattr(response, 'text') else ""
+        })
+
+    return segments
+
+
+def preprocess_for_openai(audio_path: str, working_dir: Path) -> Optional[str]:
+    """
+    Compress audio if too large for OpenAI API (25MB limit).
 
     Args:
         audio_path: Path to audio file
         working_dir: Directory for intermediate files
-        model_name: Whisper model to use (default: large-v3-turbo)
+
+    Returns:
+        Path to compressed audio, or None if still too large (needs splitting)
+    """
+    file_size_mb = Path(audio_path).stat().st_size / (1024 * 1024)
+
+    if file_size_mb <= 24:
+        logger.info(f"File size {file_size_mb:.1f}MB is under 25MB limit, no compression needed")
+        return audio_path
+
+    logger.info(f"File size {file_size_mb:.1f}MB exceeds 25MB limit, compressing...")
+
+    try:
+        audio = AudioSegment.from_file(audio_path)
+        compressed_path = working_dir / "compressed_for_api.mp3"
+
+        # Export as compressed MP3 (64kbps mono is good for speech)
+        audio.export(
+            compressed_path,
+            format="mp3",
+            bitrate="64k",
+            parameters=["-ac", "1"]  # Mono audio
+        )
+
+        new_size_mb = compressed_path.stat().st_size / (1024 * 1024)
+        logger.info(f"Compressed from {file_size_mb:.1f}MB to {new_size_mb:.1f}MB")
+
+        if new_size_mb > 24:
+            logger.warning(f"Compressed size {new_size_mb:.1f}MB still exceeds limit, will need to split")
+            return None  # Trigger splitting logic
+
+        return str(compressed_path)
+
+    except Exception as e:
+        logger.error(f"Audio compression failed: {e}", exc_info=True)
+        return None  # Trigger splitting logic as fallback
+
+
+def _transcribe_split_audio(audio_path: str, working_dir: Path, language: str = "sv") -> List[Dict[str, Any]]:
+    """
+    Split large audio files into chunks and transcribe each with OpenAI API.
+
+    Args:
+        audio_path: Path to audio file (>25MB)
+        working_dir: Directory for intermediate files
+        language: ISO 639-1 language code
+
+    Returns:
+        List of merged segments with adjusted timestamps
+    """
+    logger.info(f"Splitting audio file for OpenAI API: {audio_path}")
+
+    audio = AudioSegment.from_file(audio_path)
+    total_duration_ms = len(audio)
+
+    # Calculate chunk size (10 minutes = 600,000ms)
+    chunk_duration_ms = 10 * 60 * 1000
+    num_chunks = (total_duration_ms + chunk_duration_ms - 1) // chunk_duration_ms  # Ceiling division
+
+    logger.info(f"Splitting {total_duration_ms/1000:.1f}s audio into {num_chunks} chunks of ~10 minutes each")
+
+    all_segments = []
+    cumulative_offset = 0.0
+
+    for i in range(num_chunks):
+        start_ms = i * chunk_duration_ms
+        end_ms = min(start_ms + chunk_duration_ms, total_duration_ms)
+
+        chunk = audio[start_ms:end_ms]
+        chunk_path = working_dir / f"chunk_{i:03d}.mp3"
+
+        # Export as compressed MP3 to stay under 25MB
+        chunk.export(chunk_path, format="mp3", bitrate="64k", parameters=["-ac", "1"])
+
+        chunk_size_mb = chunk_path.stat().st_size / (1024 * 1024)
+        logger.info(f"Processing chunk {i+1}/{num_chunks}: {chunk_size_mb:.1f}MB")
+
+        # Transcribe this chunk
+        try:
+            segments = _call_openai_whisper_api(str(chunk_path), language)
+
+            # Adjust timestamps by cumulative offset
+            for seg in segments:
+                seg["start"] += cumulative_offset
+                seg["end"] += cumulative_offset
+                all_segments.append(seg)
+
+            # Update offset for next chunk
+            cumulative_offset += len(chunk) / 1000.0
+
+            # Clean up chunk file
+            chunk_path.unlink()
+
+        except Exception as e:
+            logger.error(f"Chunk {i+1} transcription failed: {e}", exc_info=True)
+            # Clean up and re-raise
+            if chunk_path.exists():
+                chunk_path.unlink()
+            raise RuntimeError(f"Chunk {i+1} transcription failed: {e}")
+
+    logger.info(f"Split transcription completed: {len(all_segments)} total segments from {num_chunks} chunks")
+    return all_segments
+
+
+def transcribe_with_openai_whisper(audio_path: str, working_dir: Path, language: str = "sv") -> List[Dict[str, Any]]:
+    """
+    Transcribe audio using OpenAI Whisper API.
+
+    Handles:
+    - Files up to 25MB (direct API call)
+    - Files >25MB (compression, then splitting if needed)
+    - Swedish language specification
+    - Segment-level timestamps
+    - Rate limiting with retry logic
+
+    Args:
+        audio_path: Path to audio file
+        working_dir: Directory for intermediate files
+        language: ISO 639-1 language code (default: "sv" for Swedish)
+
+    Returns:
+        List of segments with start, end, text (same format as faster-whisper)
+
+    Raises:
+        ValueError: If OPENAI_API_KEY not found
+        RuntimeError: If transcription fails after retries
+    """
+    logger.info(f"Starting OpenAI Whisper API transcription for: {audio_path}")
+
+    # Check and compress file if needed
+    processed_path = preprocess_for_openai(audio_path, working_dir)
+
+    if processed_path is None:
+        # File too large even after compression, need to split
+        logger.info("File requires splitting into chunks")
+        return _transcribe_split_audio(audio_path, working_dir, language)
+
+    # File is small enough, transcribe directly
+    segments = _call_openai_whisper_api(processed_path, language)
+
+    # Save transcript
+    transcript_path = working_dir / "transcript.json"
+    with open(transcript_path, "w", encoding="utf-8") as f:
+        json.dump(segments, f, ensure_ascii=False, indent=2)
+    logger.info(f"Transcript saved to: {transcript_path}")
+
+    logger.info(f"OpenAI Whisper transcription completed: {len(segments)} segments detected")
+    return segments
+
+
+def transcribe_file(audio_path: str, working_dir: Path, model_name: str = "large-v3-turbo", use_api: bool = False) -> List[Dict[str, Any]]:
+    """
+    Transcribe audio file using OpenAI Whisper API (default) or local faster-whisper.
+
+    Args:
+        audio_path: Path to audio file
+        working_dir: Directory for intermediate files
+        model_name: Whisper model to use for local transcription (default: large-v3-turbo)
+        use_api: If True, use OpenAI Whisper API. If False, use local faster-whisper (default: False)
 
     Returns:
         List of segments with start, end, text
     """
-    logger.info(f"Starting transcription for: {audio_path} with model: {model_name}")
+    logger.info(f"Starting transcription for: {audio_path}")
+
+    # Use OpenAI API if requested
+    if use_api:
+        logger.info("Using OpenAI Whisper API for transcription")
+        return transcribe_with_openai_whisper(audio_path, working_dir, language="sv")
+
+    # Use local faster-whisper
+    logger.info(f"Using local faster-whisper model: {model_name}")
 
     # Preprocess audio for better detection
     try:
