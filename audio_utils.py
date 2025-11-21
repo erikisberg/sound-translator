@@ -25,6 +25,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# DeepL Glossary ID (optional - for custom terminology)
+# Set to None to disable glossary usage
+DEEPL_GLOSSARY_ID = "ddb25cb9-deab-451c-add7-8da430b5adf4"
+
 
 def retry_with_backoff(
     func: Callable[[], T],
@@ -572,6 +576,9 @@ def translate_segments(
 def _translate_with_deepl(segments: List[Dict[str, Any]], working_dir: Path) -> List[Dict[str, Any]]:
     """Translate using DeepL API with retry logic and connection reuse."""
     logger.info("Using DeepL for translation")
+    if DEEPL_GLOSSARY_ID:
+        logger.info(f"DeepL glossary enabled: {DEEPL_GLOSSARY_ID}")
+
     api_key = os.getenv("DEEPL_API_KEY")
     if not api_key:
         logger.error("DEEPL_API_KEY not found in environment")
@@ -589,10 +596,14 @@ def _translate_with_deepl(segments: List[Dict[str, Any]], working_dir: Path) -> 
                 logger.debug(f"Translating segment {i+1}/{len(segments)}")
                 data = {
                     "text": segment["text"],
-                    "source_lang": "SV",
+                    "source_lang": "SV",      # Required for glossary
                     "target_lang": "EN-US",
                     "preserve_formatting": "1"
                 }
+
+                # Add glossary if configured (optional)
+                if DEEPL_GLOSSARY_ID:
+                    data["glossary_id"] = DEEPL_GLOSSARY_ID
 
                 # Use retry with exponential backoff for network resilience
                 def translate_request():
