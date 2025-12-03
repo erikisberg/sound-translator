@@ -722,19 +722,19 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
     if voice_settings is None:
         voice_settings = {}
     
-    # Extract voice settings with defaults (optimized for Professional Voice Clone expressiveness)
+    # Extract voice settings with defaults (optimized for long-form consistency per ElevenLabs recommendations)
     speaking_rate = voice_settings.get("speaking_rate", float(os.getenv("ELEVEN_SPEAKING_RATE", "1.0")))
-    stability = voice_settings.get("stability", 0.65)  # Balanced: natural variation while maintaining consistency
-    similarity_boost = voice_settings.get("similarity_boost", 0.85)  # Higher for PVC: tighter match to cloned voice
-    style = voice_settings.get("style", 0.4)  # Moderate expressiveness: adds emotion and naturalness
+    stability = voice_settings.get("stability", 0.50)  # ElevenLabs recommended: ~50 for consistency
+    similarity_boost = voice_settings.get("similarity_boost", 0.75)  # ElevenLabs recommended: ~75
+    style = voice_settings.get("style", 0.0)  # ElevenLabs recommended: 0 for long-form to prevent drift
     use_speaker_boost = voice_settings.get("use_speaker_boost", True)
-    voice_model = voice_settings.get("voice_model", "eleven_multilingual_v2")  # Better prosody than v1
+    voice_model = voice_settings.get("voice_model", "eleven_multilingual_v2")  # Most stable for long-form
 
     logger.info(f"Voice settings: voice_id={voice_id}, model={voice_model}, rate={speaking_rate}")
 
     # Request stitching settings for voice consistency
     use_request_stitching = voice_settings.get("use_request_stitching", True)
-    context_window_size = voice_settings.get("context_window_size", 3)
+    context_window_size = voice_settings.get("context_window_size", 5)  # Increased from 3 for longer sessions
 
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
     headers = {
@@ -775,6 +775,7 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
                 data = {
                     "text": english_text,
                     "model_id": voice_model,
+                    "seed": voice_settings.get("seed", 42),  # Fixed seed for reproducible, consistent voice
                     "voice_settings": {
                         "stability": stability,
                         "similarity_boost": similarity_boost,
@@ -797,6 +798,16 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
                     if previous_request_ids:
                         # Use last N request IDs (requests must be <2 hours old)
                         data["previous_request_ids"] = previous_request_ids[-context_window_size:]
+
+                    # Add next_text lookahead for smoother transitions (reduces end-of-session drift)
+                    if i < len(segments) - 1:
+                        next_texts = []
+                        for j in range(i + 1, min(i + 1 + context_window_size, len(segments))):
+                            next_seg_text = segments[j].get("english", "").strip()
+                            if next_seg_text:
+                                next_texts.append(next_seg_text)
+                        if next_texts:
+                            data["next_text"] = " ".join(next_texts)
 
                 # Add speed control for supported models
                 # Note: Not all models support speed parameter
