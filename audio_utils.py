@@ -772,7 +772,7 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
                 english_text = ' '.join(english_text.split()[:400])
 
             try:
-                # Build request data with ElevenLabs best practices for consistency
+                # Build request data - keep it simple and only use well-supported parameters
                 data = {
                     "text": english_text,
                     "model_id": voice_model,
@@ -781,14 +781,8 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
                         "similarity_boost": similarity_boost,
                         "style": style,
                         "use_speaker_boost": use_speaker_boost
-                    },
-                    "apply_text_normalization": "auto"  # Automatic text normalization
+                    }
                 }
-
-                # Add seed if provided (for reproducible voice generation)
-                seed_value = voice_settings.get("seed")
-                if seed_value is not None:
-                    data["seed"] = int(seed_value)
 
                 # Add request stitching for voice consistency (official ElevenLabs feature)
                 # Note: Request stitching does NOT work with eleven_v3 model
@@ -803,24 +797,8 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
                         # Use last N request IDs (requests must be <2 hours old)
                         data["previous_request_ids"] = previous_request_ids[-context_window_size:]
 
-                    # Add next_text lookahead for smoother transitions (reduces end-of-session drift)
-                    if i < len(segments) - 1:
-                        next_texts = []
-                        for j in range(i + 1, min(i + 1 + context_window_size, len(segments))):
-                            next_seg_text = segments[j].get("english", "").strip()
-                            if next_seg_text:
-                                next_texts.append(next_seg_text)
-                        if next_texts:
-                            data["next_text"] = " ".join(next_texts)
-
-                # Add speed control for supported models
-                # Note: Not all models support speed parameter
-                # Safe models: eleven_turbo_v2_5, eleven_flash_v2_5, eleven_multilingual_v2
-                if voice_model in ["eleven_turbo_v2_5", "eleven_flash_v2_5", "eleven_multilingual_v2", "eleven_multilingual_v2_5"]:
-                    # Speed control: Valid range is 0.7-1.2 (1.0 = normal, 0.7 = slowest, 1.2 = fastest)
-                    speed = max(0.7, min(1.2, speaking_rate))
-                    data["voice_settings"]["speed"] = speed
-                    logger.info(f"Using speed={speed} for model {voice_model}")
+                # Log the request for debugging
+                logger.debug(f"TTS request data keys: {list(data.keys())}")
 
                 # Use retry with exponential backoff for network resilience
                 def tts_request():
