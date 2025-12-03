@@ -60,7 +60,7 @@ def retry_with_backoff(
         try:
             return func()
         except (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError,
-                APIConnectionError, APITimeoutError) as e:
+                httpx.RemoteProtocolError, APIConnectionError, APITimeoutError) as e:
             last_exception = e
             if attempt < max_retries - 1:
                 logger.warning(f"{operation_name} failed (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {delay:.1f}s...")
