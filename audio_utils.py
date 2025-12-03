@@ -884,11 +884,22 @@ def stitch_segments(
     # Track max volume for normalization (replaces audio_segments array to save memory)
     max_volume_db = float('-inf')
 
+    # Target loudness for per-segment normalization (in dBFS)
+    # -16 dBFS is a good target for speech (leaves headroom, consistent loudness)
+    TARGET_LOUDNESS_DBFS = -16.0
+
     for i, (segment, audio_file) in enumerate(zip(segments, audio_files)):
-        # Load generated audio directly (skip per-segment enhancement to prevent artifacts)
+        # Load generated audio
         generated_audio = AudioSegment.from_file(audio_file)
 
-        # Track max volume for normalization (avoids storing all audio twice)
+        # Normalize each segment individually to target loudness BEFORE stitching
+        # This fixes the ElevenLabs volume drift issue where later segments are quieter
+        if generated_audio.dBFS > float('-inf') and len(generated_audio) > 100:
+            loudness_diff = TARGET_LOUDNESS_DBFS - generated_audio.dBFS
+            generated_audio = generated_audio.apply_gain(loudness_diff)
+            logger.debug(f"Segment {i+1}: normalized by {loudness_diff:+.1f}dB to {TARGET_LOUDNESS_DBFS}dBFS")
+
+        # Track max volume for final normalization
         if generated_audio.max_dBFS > float('-inf'):
             max_volume_db = max(max_volume_db, generated_audio.max_dBFS)
         
@@ -963,7 +974,10 @@ def stitch_segments(
 
 def normalize_audio_segments(final_audio: AudioSegment, max_volume_db: float) -> AudioSegment:
     """
-    Normalize audio to have consistent volume levels.
+    Final normalization pass to ensure consistent volume levels.
+
+    Note: Per-segment normalization is done in stitch_segments() BEFORE stitching.
+    This function handles final peak normalization and gentle compression.
 
     Args:
         final_audio: The complete audio to normalize
@@ -973,22 +987,26 @@ def normalize_audio_segments(final_audio: AudioSegment, max_volume_db: float) ->
         Normalized audio segment
     """
     try:
-        # Calculate target volume (3dB below max to prevent clipping)
-        target_volume = max_volume_db - 3
+        print(f"Input audio level: {final_audio.dBFS:.1f}dBFS (max peak: {max_volume_db:.1f}dB)")
 
-        print(f"Target volume: {target_volume:.1f}dB (max: {max_volume_db:.1f}dB)")
+        # Peak normalize to -1dBFS (leaves headroom, prevents clipping)
+        if final_audio.max_dBFS > float('-inf'):
+            peak_headroom = -1.0 - final_audio.max_dBFS
+            normalized_audio = final_audio.apply_gain(peak_headroom)
+            print(f"Peak normalized by {peak_headroom:+.1f}dB to -1dBFS")
+        else:
+            normalized_audio = final_audio
 
-        # Normalize the entire audio
-        normalized_audio = final_audio.normalize()
-
-        # Apply gentle compression to even out volume levels (reduced ratio to prevent artifacts)
+        # Apply compression to even out any remaining volume variations
+        # Using moderate settings that won't introduce artifacts
         normalized_audio = normalized_audio.compress_dynamic_range(
-            threshold=-20.0,
-            ratio=1.5,  # Reduced from 3.0 to prevent distortion/noise
-            attack=5.0,
-            release=50.0
+            threshold=-18.0,  # Start compressing at -18dBFS
+            ratio=2.5,        # Moderate compression (increased from 1.5)
+            attack=10.0,      # 10ms attack (natural for speech)
+            release=100.0     # 100ms release (smooth recovery)
         )
 
+        print(f"Final audio level: {normalized_audio.dBFS:.1f}dBFS")
         print("Audio normalization completed")
         return normalized_audio
 
