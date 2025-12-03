@@ -736,9 +736,10 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
     use_request_stitching = voice_settings.get("use_request_stitching", True)
     context_window_size = voice_settings.get("context_window_size", 5)  # Increased from 3 for longer sessions
 
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+    # output_format is a query parameter, not body parameter
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream?output_format=mp3_44100_128"
     headers = {
-        "Accept": "application/json",
+        "Accept": "audio/mpeg",
         "xi-api-key": api_key,
         "Content-Type": "application/json"
     }
@@ -775,16 +776,19 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
                 data = {
                     "text": english_text,
                     "model_id": voice_model,
-                    "seed": voice_settings.get("seed", 42),  # Fixed seed for reproducible, consistent voice
                     "voice_settings": {
                         "stability": stability,
                         "similarity_boost": similarity_boost,
                         "style": style,
                         "use_speaker_boost": use_speaker_boost
                     },
-                    "output_format": "mp3_44100_128",  # High quality output
                     "apply_text_normalization": "auto"  # Automatic text normalization
                 }
+
+                # Add seed if provided (for reproducible voice generation)
+                seed_value = voice_settings.get("seed")
+                if seed_value is not None:
+                    data["seed"] = int(seed_value)
 
                 # Add request stitching for voice consistency (official ElevenLabs feature)
                 # Note: Request stitching does NOT work with eleven_v3 model
