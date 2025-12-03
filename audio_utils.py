@@ -784,21 +784,17 @@ def generate_tts(segments: List[Dict[str, Any]], working_dir: Path, voice_settin
                     }
                 }
 
-                # Add request stitching for voice consistency (official ElevenLabs feature)
-                # Note: Request stitching does NOT work with eleven_v3 model
-                if use_request_stitching and "v3" not in voice_model.lower():
-                    # Add previous_text context for prosody continuity
-                    if previous_texts and context_window_size > 0:
-                        context_segments = previous_texts[-context_window_size:]
-                        data["previous_text"] = " ".join(context_segments)
-
-                    # Add previous_request_ids for even better consistency
-                    if previous_request_ids:
-                        # Use last N request IDs (requests must be <2 hours old)
-                        data["previous_request_ids"] = previous_request_ids[-context_window_size:]
+                # TEMPORARILY DISABLED: Request stitching causing 400 errors
+                # TODO: Re-enable after debugging
+                # if use_request_stitching and "v3" not in voice_model.lower():
+                #     if previous_texts and context_window_size > 0:
+                #         context_segments = previous_texts[-context_window_size:]
+                #         data["previous_text"] = " ".join(context_segments)
+                #     if previous_request_ids:
+                #         data["previous_request_ids"] = previous_request_ids[-context_window_size:]
 
                 # Log the request for debugging
-                logger.debug(f"TTS request data keys: {list(data.keys())}")
+                logger.info(f"TTS request for segment {i+1}: text length={len(english_text)}, model={voice_model}")
 
                 # Use retry with exponential backoff for network resilience
                 def tts_request():
