@@ -1,6 +1,8 @@
 """
 Swedish Audio Translator - Streamlit App
 Transcribe Swedish audio → Translate to English → Generate English TTS
+
+Version: 1.1.0 - Voice consistency improvements
 """
 
 import streamlit as st
