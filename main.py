@@ -756,7 +756,8 @@ def main():
             num_rows="dynamic"
         )
 
-        # Save table edits button
+        # Save table edits button with instruction
+        st.caption("💡 Klicka utanför cellen efter redigering, vänta på omladdning, sedan spara.")
         if st.button("Save Table Changes", help="Save your manual edits to Swedish/English text"):
             # Sync edited dataframe back to session state
             updated_segments = []
