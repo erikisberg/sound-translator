@@ -149,9 +149,6 @@ def load_session_into_state(session: Session) -> None:
     st.session_state.translated_segments = [
         seg for seg in session.segments if seg.get("english")
     ]
-    # Clear editor_df so it gets recreated with new data
-    st.session_state.editor_df = None
-    st.session_state.editor_segments_hash = None
 
     logger.info(f"load_session_into_state: Loaded {len(st.session_state.segments)} segments, "
                 f"session_name now='{st.session_state.session_name}'")
@@ -825,24 +822,18 @@ def main():
                     else:
                         st.error("End time must be after start time")
 
-        # Create editable dataframe - only recreate when segments or translations change
-        segments_hash = hash(str(st.session_state.segments) + str(st.session_state.translated_segments))
-        if "editor_df" not in st.session_state or st.session_state.get("editor_segments_hash") != segments_hash:
-            st.session_state.editor_df = create_segments_dataframe(st.session_state.segments)
-            st.session_state.editor_segments_hash = segments_hash
-            logger.debug(f"Created new editor_df with {len(st.session_state.editor_df)} rows")
+        # Create dataframe from segments
+        df = create_segments_dataframe(st.session_state.segments)
 
         # Add segment management controls
         col1, col2 = st.columns([1, 1])
         with col1:
-            st.write(f"**Total segments:** {len(st.session_state.editor_df)}")
+            st.write(f"**Total segments:** {len(df)}")
         with col2:
             if st.button("Reset All Segments"):
                 if st.session_state.get('confirm_reset', False):
                     st.session_state.segments = []
                     st.session_state.translated_segments = []
-                    st.session_state.editor_df = None  # Force recreate
-                    st.session_state.editor_segments_hash = None
                     st.session_state.confirm_reset = False
                     st.success("All segments cleared!")
                     st.rerun()
@@ -850,21 +841,26 @@ def main():
                     st.session_state.confirm_reset = True
                     st.warning("Click again to confirm reset")
 
-        edited_df = st.data_editor(
-            st.session_state.editor_df,
-            column_config={
-                "Start": st.column_config.TextColumn("Start", disabled=True),
-                "End": st.column_config.TextColumn("End", disabled=True),
-                "Swedish": st.column_config.TextColumn("Swedish", width="large"),
-                "English": st.column_config.TextColumn("English", width="large")
-            },
-            hide_index=True,
-            use_container_width=True,
-            num_rows="dynamic"  # Allow adding/removing rows
-        )
+        # Use form to capture edits before rerun
+        with st.form("segments_form"):
+            edited_df = st.data_editor(
+                df,
+                column_config={
+                    "Start": st.column_config.TextColumn("Start", disabled=True),
+                    "End": st.column_config.TextColumn("End", disabled=True),
+                    "Swedish": st.column_config.TextColumn("Swedish", width="large"),
+                    "English": st.column_config.TextColumn("English", width="large")
+                },
+                hide_index=True,
+                use_container_width=True,
+                num_rows="dynamic"  # Allow adding/removing rows
+            )
 
-        # Save table edits button
-        if st.button("Save Table Changes", help="Save your manual edits to Swedish/English text"):
+            # Save button inside form
+            submitted = st.form_submit_button("Save Table Changes", help="Save your manual edits to Swedish/English text")
+
+        # Handle form submission
+        if submitted:
             # Sync edited dataframe back to session state
             logger.info(f"Save Table Changes clicked: edited_df has {len(edited_df)} rows, "
                        f"session_state.segments has {len(st.session_state.segments)} segments")
@@ -893,9 +889,6 @@ def main():
             # Keep all segments in translated_segments (not just those with english)
             # so that save_current_session() saves the edited Swedish text too
             st.session_state.translated_segments = updated_segments
-            # Update editor_df hash so it doesn't get overwritten
-            st.session_state.editor_segments_hash = hash(str(updated_segments))
-            st.session_state.editor_df = edited_df.copy()
 
             logger.info(f"Updated session_state: segments={len(st.session_state.segments)}, "
                        f"translated_segments={len(st.session_state.translated_segments)}")
@@ -941,9 +934,6 @@ def main():
                             working_dir=st.session_state.working_dir
                         )
                         st.session_state.translated_segments = translated
-                        # Clear editor_df so it gets recreated with translations
-                        st.session_state.editor_df = None
-                        st.session_state.editor_segments_hash = None
                         st.success(f"Translated {len(translated)} segments")
 
                         # Auto-save after translation
