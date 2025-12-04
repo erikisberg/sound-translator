@@ -38,6 +38,12 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
+def format_time(seconds: float) -> str:
+    """Format seconds as MM:SS.ms"""
+    mins = int(seconds // 60)
+    secs = seconds % 60
+    return f"{mins}:{secs:05.2f}"
+
 # App configuration
 st.set_page_config(
     page_title="Swedish Audio Translator",
