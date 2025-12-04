@@ -864,6 +864,10 @@ def main():
             if len(st.session_state.segments) > 0:
                 logger.info(f"Before update - segment[0].text: '{st.session_state.segments[0].get('text', '')[:50]}...'")
 
+            # Log what edited_df actually contains
+            if len(edited_df) > 0:
+                logger.info(f"edited_df[0].Swedish: '{str(edited_df.iloc[0]['Swedish'])[:50]}...'")
+
             updated_segments = []
             for i, (_, row) in enumerate(edited_df.iterrows()):
                 if i < len(st.session_state.segments):
