@@ -262,13 +262,13 @@ def import_session_json(json_data: str) -> Optional[Session]:
 
 
 def generate_session_name(filename: Optional[str] = None) -> str:
-    """Generate a default session name based on filename and date."""
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    """Generate a default session name based on filename, date, and time."""
+    datetime_str = datetime.now().strftime("%Y-%m-%d_%H%M")
     if filename:
         # Remove extension and use as base
         base_name = filename.rsplit(".", 1)[0]
-        return f"{base_name}_{date_str}"
-    return f"Session_{date_str}"
+        return f"{base_name}_{datetime_str}"
+    return f"Session_{datetime_str}"
 
 
 # Singleton instance
