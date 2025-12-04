@@ -83,6 +83,7 @@ def init_session_state() -> None:
 def save_current_session(status: str = "in_progress") -> bool:
     """Save the current session to database."""
     if not is_db_available():
+        logger.warning("save_current_session: DB not available")
         return False
 
     manager = get_session_manager()
@@ -90,9 +91,18 @@ def save_current_session(status: str = "in_progress") -> bool:
     # Create or update session - generate new ID if none exists
     session_id = st.session_state.current_session_id or str(uuid.uuid4())
 
+    # Get session name - prefer existing name, then session_state, then generate
+    session_name = st.session_state.session_name
+    if not session_name:
+        session_name = generate_session_name(st.session_state.source_filename)
+
+    logger.info(f"save_current_session: id={session_id[:8]}..., name='{session_name}', "
+                f"session_state.session_name='{st.session_state.session_name}', "
+                f"segments={len(st.session_state.translated_segments or st.session_state.segments)}")
+
     session = Session(
         id=session_id,
-        name=st.session_state.session_name or generate_session_name(st.session_state.source_filename),
+        name=session_name,
         status=status,
         source_filename=st.session_state.source_filename,
         settings={
@@ -114,6 +124,7 @@ def save_current_session(status: str = "in_progress") -> bool:
     # If no session ID yet, use the generated one
     if not st.session_state.current_session_id:
         st.session_state.current_session_id = session.id
+        logger.info(f"save_current_session: New session created with id={session.id[:8]}...")
 
     if manager.save_session(session):
         st.session_state.session_name = session.name
@@ -124,6 +135,9 @@ def save_current_session(status: str = "in_progress") -> bool:
 
 def load_session_into_state(session: Session) -> None:
     """Load a session's data into session state."""
+    logger.info(f"load_session_into_state: Loading session id={session.id[:8]}..., name='{session.name}', "
+                f"segments={len(session.segments)}")
+
     st.session_state.current_session_id = session.id
     st.session_state.session_name = session.name
     st.session_state.source_filename = session.source_filename
@@ -134,6 +148,9 @@ def load_session_into_state(session: Session) -> None:
     st.session_state.translated_segments = [
         seg for seg in session.segments if seg.get("english")
     ]
+
+    logger.info(f"load_session_into_state: Loaded {len(st.session_state.segments)} segments, "
+                f"session_name now='{st.session_state.session_name}'")
 
     # Load settings
     if session.settings:
@@ -179,17 +196,18 @@ def main():
         db_available = is_db_available()
 
         if db_available:
-            # Session name input - use a default if empty
-            default_name = st.session_state.session_name if st.session_state.session_name else generate_session_name(st.session_state.source_filename)
+            # Session name input - always sync from text input
+            current_name = st.session_state.session_name or generate_session_name(st.session_state.source_filename)
             session_name = st.text_input(
                 "Session Name",
-                value=default_name,
+                value=current_name,
                 help="Name for this translation session",
                 key="session_name_input"
             )
-            # Only update if user actually changed it (not on initial render)
-            if session_name and session_name != default_name:
+            # Always update session_state with the input value
+            if session_name:
                 st.session_state.session_name = session_name
+                logger.debug(f"Session name updated to: '{session_name}'")
 
             # Save status indicator
             if st.session_state.last_saved_at:
