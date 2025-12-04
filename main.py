@@ -854,6 +854,13 @@ def main():
         # Save table edits button
         if st.button("Save Table Changes", help="Save your manual edits to Swedish/English text"):
             # Sync edited dataframe back to session state
+            logger.info(f"Save Table Changes clicked: edited_df has {len(edited_df)} rows, "
+                       f"session_state.segments has {len(st.session_state.segments)} segments")
+
+            # Log first segment before and after for debugging
+            if len(st.session_state.segments) > 0:
+                logger.info(f"Before update - segment[0].text: '{st.session_state.segments[0].get('text', '')[:50]}...'")
+
             updated_segments = []
             for i, (_, row) in enumerate(edited_df.iterrows()):
                 if i < len(st.session_state.segments):
@@ -862,17 +869,26 @@ def main():
                     seg["english"] = row["English"] if pd.notna(row["English"]) else ""
                     updated_segments.append(seg)
 
+            # Log what we're about to save
+            if len(updated_segments) > 0:
+                logger.info(f"After update - updated_segments[0].text: '{updated_segments[0].get('text', '')[:50]}...'")
+
             st.session_state.segments = updated_segments
             # Keep all segments in translated_segments (not just those with english)
             # so that save_current_session() saves the edited Swedish text too
             st.session_state.translated_segments = updated_segments
 
+            logger.info(f"Updated session_state: segments={len(st.session_state.segments)}, "
+                       f"translated_segments={len(st.session_state.translated_segments)}")
+
             # Save to database
             if is_db_available():
                 if save_current_session():
                     st.success("Changes saved!")
+                    logger.info("Save Table Changes: Successfully saved to database")
                 else:
                     st.error("Failed to save")
+                    logger.error("Save Table Changes: Failed to save to database")
             else:
                 st.success("Changes saved to session!")
             st.rerun()
