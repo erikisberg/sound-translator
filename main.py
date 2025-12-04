@@ -11,6 +11,7 @@ import tempfile
 import atexit
 import shutil
 import logging
+import uuid
 from pathlib import Path
 from typing import List, Dict, Any
 import pandas as pd
@@ -22,6 +23,15 @@ from audio_utils import (
     generate_tts,
     stitch_segments
 )
+from session_manager import (
+    Session,
+    SessionManager,
+    get_session_manager,
+    export_session_json,
+    import_session_json,
+    generate_session_name
+)
+from database import is_db_available
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -44,6 +54,15 @@ def init_session_state() -> None:
         st.session_state.translated_segments = []
     if "final_audio_path" not in st.session_state:
         st.session_state.final_audio_path = None
+    # Session management
+    if "current_session_id" not in st.session_state:
+        st.session_state.current_session_id = None
+    if "session_name" not in st.session_state:
+        st.session_state.session_name = ""
+    if "last_saved_at" not in st.session_state:
+        st.session_state.last_saved_at = None
+    if "source_filename" not in st.session_state:
+        st.session_state.source_filename = None
     if "working_dir" not in st.session_state:
         st.session_state.working_dir = Path(tempfile.mkdtemp(prefix="audio_translator_"))
         st.session_state.working_dir.mkdir(exist_ok=True)
@@ -60,6 +79,71 @@ def init_session_state() -> None:
                 logger.error(f"Failed to cleanup temp directory: {e}")
 
         atexit.register(cleanup_working_dir)
+
+def save_current_session(status: str = "in_progress") -> bool:
+    """Save the current session to database."""
+    if not is_db_available():
+        return False
+
+    manager = get_session_manager()
+
+    # Create or update session - generate new ID if none exists
+    session_id = st.session_state.current_session_id or str(uuid.uuid4())
+
+    session = Session(
+        id=session_id,
+        name=st.session_state.session_name or generate_session_name(st.session_state.source_filename),
+        status=status,
+        source_filename=st.session_state.source_filename,
+        settings={
+            "use_openai_api": st.session_state.get("use_openai_api", False),
+            "whisper_model": st.session_state.get("whisper_model"),
+            "voice_settings": st.session_state.get("voice_settings", {}),
+        },
+        segments=[
+            {
+                "start": seg.get("start"),
+                "end": seg.get("end"),
+                "text": seg.get("text", ""),
+                "english": seg.get("english", ""),
+            }
+            for seg in st.session_state.translated_segments or st.session_state.segments
+        ],
+    )
+
+    # If no session ID yet, use the generated one
+    if not st.session_state.current_session_id:
+        st.session_state.current_session_id = session.id
+
+    if manager.save_session(session):
+        st.session_state.session_name = session.name
+        st.session_state.last_saved_at = session.updated_at
+        return True
+    return False
+
+
+def load_session_into_state(session: Session) -> None:
+    """Load a session's data into session state."""
+    st.session_state.current_session_id = session.id
+    st.session_state.session_name = session.name
+    st.session_state.source_filename = session.source_filename
+    st.session_state.last_saved_at = session.updated_at
+
+    # Load segments
+    st.session_state.segments = session.segments
+    st.session_state.translated_segments = [
+        seg for seg in session.segments if seg.get("english")
+    ]
+
+    # Load settings
+    if session.settings:
+        if "use_openai_api" in session.settings:
+            st.session_state.use_openai_api = session.settings["use_openai_api"]
+        if "whisper_model" in session.settings:
+            st.session_state.whisper_model = session.settings["whisper_model"]
+        if "voice_settings" in session.settings:
+            st.session_state.voice_settings = session.settings["voice_settings"]
+
 
 def create_segments_dataframe(segments: List[Dict[str, Any]]) -> pd.DataFrame:
     """Create a DataFrame from segments for editing."""
@@ -88,8 +172,204 @@ def main():
     st.title("Swedish Audio Translator")
     st.markdown("Upload Swedish audio → Transcribe → Translate → Generate English TTS")
     
-    # API Key Status
+    # Sidebar
     with st.sidebar:
+        # Session Management Section
+        st.header("Session")
+        db_available = is_db_available()
+
+        if db_available:
+            # Session name input - use a default if empty
+            default_name = st.session_state.session_name if st.session_state.session_name else generate_session_name(st.session_state.source_filename)
+            session_name = st.text_input(
+                "Session Name",
+                value=default_name,
+                help="Name for this translation session",
+                key="session_name_input"
+            )
+            # Only update if user actually changed it (not on initial render)
+            if session_name and session_name != default_name:
+                st.session_state.session_name = session_name
+
+            # Save status indicator
+            if st.session_state.last_saved_at:
+                st.caption(f"Last saved: {st.session_state.last_saved_at[:19]}")
+            elif st.session_state.current_session_id:
+                st.caption("Session active")
+            else:
+                st.caption("New session (not saved)")
+
+            # Session action buttons
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Save", use_container_width=True):
+                    if save_current_session():
+                        st.success("Saved!")
+                    else:
+                        st.error("Save failed")
+
+            with col2:
+                if st.button("New", use_container_width=True):
+                    # Reset session state
+                    st.session_state.current_session_id = None
+                    st.session_state.session_name = ""
+                    st.session_state.last_saved_at = None
+                    st.session_state.source_filename = None
+                    st.session_state.segments = []
+                    st.session_state.translated_segments = []
+                    st.session_state.final_audio_path = None
+                    st.rerun()
+
+            # Session History
+            with st.expander("Session History"):
+                manager = get_session_manager()
+                sessions = manager.list_sessions(limit=20)
+
+                if sessions:
+                    for sess in sessions:
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            # Format display
+                            status_icon = {"draft": "", "in_progress": "", "completed": ""}.get(sess["status"], "")
+                            segment_info = f"{sess['segment_count']} segments" if sess["segment_count"] else "empty"
+                            date_str = sess["updated_at"][:10] if sess["updated_at"] else ""
+
+                            # Extract voice settings for display
+                            settings_data = sess.get("settings") or {}
+                            vs = settings_data.get("voice_settings") or {}
+                            if vs:
+                                sr = vs.get("speaking_rate", "-")
+                                stab = vs.get("stability", "-")
+                                sim = vs.get("similarity_boost", "-")
+                                sty = vs.get("style", "-")
+                                settings_str = f"SR:{sr} S:{stab} SB:{sim} ST:{sty}"
+                            else:
+                                settings_str = None
+
+                            st.write(f"**{status_icon} {sess['name']}**")
+                            if settings_str:
+                                st.caption(f"{date_str} | {segment_info} | {settings_str}")
+                            else:
+                                st.caption(f"{date_str} | {segment_info}")
+
+                        with col2:
+                            if st.button("Load", key=f"load_{sess['id']}", use_container_width=True):
+                                loaded = manager.load_session(sess["id"])
+                                if loaded:
+                                    load_session_into_state(loaded)
+                                    st.success(f"Loaded: {loaded.name}")
+                                    st.rerun()
+
+                    # Delete session option
+                    st.divider()
+                    delete_id = st.selectbox(
+                        "Delete session:",
+                        options=[""] + [s["id"] for s in sessions],
+                        format_func=lambda x: next((s["name"] for s in sessions if s["id"] == x), "Select...") if x else "Select...",
+                        key="delete_session_select"
+                    )
+                    if delete_id and st.button("Delete Selected", type="secondary"):
+                        if manager.delete_session(delete_id):
+                            st.success("Deleted!")
+                            st.rerun()
+                else:
+                    st.info("No saved sessions yet")
+
+            # Export/Import
+            with st.expander("Export / Import"):
+                # Export current session
+                if st.session_state.segments:
+                    session_for_export = Session(
+                        id=st.session_state.current_session_id or "export",
+                        name=st.session_state.session_name or "Exported Session",
+                        source_filename=st.session_state.source_filename,
+                        segments=[
+                            {
+                                "start": seg.get("start"),
+                                "end": seg.get("end"),
+                                "text": seg.get("text", ""),
+                                "english": seg.get("english", ""),
+                            }
+                            for seg in st.session_state.translated_segments or st.session_state.segments
+                        ],
+                    )
+                    export_json = export_session_json(session_for_export)
+                    st.download_button(
+                        "Export Session (JSON)",
+                        data=export_json,
+                        file_name=f"{st.session_state.session_name or 'session'}.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+
+                # Import session
+                uploaded_session = st.file_uploader(
+                    "Import Session",
+                    type=["json"],
+                    help="Upload a previously exported session file",
+                    key="import_session_file"
+                )
+                if uploaded_session:
+                    try:
+                        json_content = uploaded_session.read().decode("utf-8")
+                        imported = import_session_json(json_content)
+                        if imported:
+                            load_session_into_state(imported)
+                            # Save imported session to DB
+                            if save_current_session():
+                                st.success(f"Imported: {imported.name}")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Import failed: {e}")
+
+        else:
+            st.warning("Database not configured. Sessions will not be saved.")
+            st.caption("Add DATABASE_URL to secrets.toml to enable session storage.")
+
+            # Still allow export/import without DB
+            with st.expander("Export / Import"):
+                if st.session_state.segments:
+                    session_for_export = Session(
+                        name=st.session_state.session_name or "Exported Session",
+                        source_filename=st.session_state.source_filename,
+                        segments=[
+                            {
+                                "start": seg.get("start"),
+                                "end": seg.get("end"),
+                                "text": seg.get("text", ""),
+                                "english": seg.get("english", ""),
+                            }
+                            for seg in st.session_state.translated_segments or st.session_state.segments
+                        ],
+                    )
+                    export_json = export_session_json(session_for_export)
+                    st.download_button(
+                        "Export Session (JSON)",
+                        data=export_json,
+                        file_name=f"{st.session_state.session_name or 'session'}.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+
+                uploaded_session = st.file_uploader(
+                    "Import Session",
+                    type=["json"],
+                    key="import_session_no_db"
+                )
+                if uploaded_session:
+                    try:
+                        json_content = uploaded_session.read().decode("utf-8")
+                        imported = import_session_json(json_content)
+                        if imported:
+                            load_session_into_state(imported)
+                            st.success(f"Imported: {imported.name}")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Import failed: {e}")
+
+        st.divider()
+
+        # API Key Status
         st.header("API Configuration")
         
         # Check API keys
@@ -181,13 +461,16 @@ def main():
         # ElevenLabs Voice Settings
         if eleven_key and eleven_voice:
             st.header("Voice Settings")
-            
+
+            # Get saved voice settings (from loaded session) or use defaults
+            saved_settings = st.session_state.get("voice_settings", {})
+
             # Speaking Rate
             speaking_rate = st.slider(
                 "Speaking Rate",
                 min_value=0.7,
                 max_value=1.2,
-                value=float(st.secrets.get("ELEVEN_SPEAKING_RATE", "1.0")),
+                value=saved_settings.get("speaking_rate", float(st.secrets.get("ELEVEN_SPEAKING_RATE", "1.0"))),
                 step=0.05,
                 help="Adjust speech speed: 0.7 = slowest, 1.0 = normal (default), 1.2 = fastest"
             )
@@ -203,20 +486,27 @@ def main():
             # Advanced Voice Settings
             with st.expander("Advanced Voice Settings"):
                 # Voice ID Selection
+                voice_options = [
+                    "PqclsDjBR66GIIQ7oVAc",  # Your custom voice (default)
+                    eleven_voice if eleven_voice and eleven_voice != "PqclsDjBR66GIIQ7oVAc" else None,
+                    "21m00Tcm4TlvDq8ikWAM",  # Rachel (Professional female)
+                    "AZnzlk1XvdvUeBnXmlld",  # Domi (Professional female)
+                    "EXAVITQu4vr4xnSDxMaL",  # Bella (Professional female)
+                    "VR6AewLTigWG4xSOukaG",  # Josh (Professional male)
+                    "pNInz6obpgDQGcFmaJgB",  # Adam (Professional male)
+                    "yoZ06aMxZJJ28mfd3POQ",  # Sam (Professional male)
+                    "custom"  # Custom voice ID input
+                ]
+                voice_options = [v for v in voice_options if v]  # Remove None
+
+                # Get saved voice_id or default to first option
+                saved_voice_id = saved_settings.get("voice_id", voice_options[0])
+                default_voice_index = voice_options.index(saved_voice_id) if saved_voice_id in voice_options else 0
+
                 voice_id = st.selectbox(
                     "Voice ID",
-                    options=[
-                        "PqclsDjBR66GIIQ7oVAc",  # Your custom voice (default)
-                        eleven_voice if eleven_voice and eleven_voice != "PqclsDjBR66GIIQ7oVAc" else None,  # Current configured voice if different
-                        "21m00Tcm4TlvDq8ikWAM",  # Rachel (Professional female)
-                        "AZnzlk1XvdvUeBnXmlld",  # Domi (Professional female)
-                        "EXAVITQu4vr4xnSDxMaL",  # Bella (Professional female)
-                        "VR6AewLTigWG4xSOukaG",  # Josh (Professional male)
-                        "pNInz6obpgDQGcFmaJgB",  # Adam (Professional male)
-                        "yoZ06aMxZJJ28mfd3POQ",  # Sam (Professional male)
-                        "custom"  # Custom voice ID input
-                    ],
-                    index=0,
+                    options=voice_options,
+                    index=default_voice_index,
                     help="Choose from popular ElevenLabs voices or enter a custom voice ID"
                 )
                 
@@ -255,17 +545,21 @@ def main():
                         st.info("**Voice**: Using configured voice from environment")
                 
                 # Voice Model Selection
+                model_options = [
+                    "eleven_multilingual_v2",   # ⭐ Recommended for PVC - 29 languages, 10k chars
+                    "eleven_flash_v2_5",        # Ultra-fast (~75ms) - 32 languages, 40k chars
+                    "eleven_turbo_v2_5",        # Balanced quality/speed - 32 languages, 40k chars
+                    "eleven_v3",                # Most expressive (alpha) - 70+ languages, 3k chars
+                    "eleven_turbo_v2",          # Legacy turbo (English only)
+                    "eleven_flash_v2",          # Legacy flash (English only)
+                ]
+                saved_voice_model = saved_settings.get("voice_model", "eleven_multilingual_v2")
+                default_model_index = model_options.index(saved_voice_model) if saved_voice_model in model_options else 0
+
                 voice_model = st.selectbox(
                     "Voice Model",
-                    options=[
-                        "eleven_multilingual_v2",   # ⭐ Recommended for PVC - 29 languages, 10k chars
-                        "eleven_flash_v2_5",        # Ultra-fast (~75ms) - 32 languages, 40k chars
-                        "eleven_turbo_v2_5",        # Balanced quality/speed - 32 languages, 40k chars
-                        "eleven_v3",                # Most expressive (alpha) - 70+ languages, 3k chars
-                        "eleven_turbo_v2",          # Legacy turbo (English only)
-                        "eleven_flash_v2",          # Legacy flash (English only)
-                    ],
-                    index=0,
+                    options=model_options,
+                    index=default_model_index,
                     help="For Professional Voice Clones: multilingual_v2 recommended (best prosody + request stitching support)"
                 )
 
@@ -306,7 +600,7 @@ def main():
                     "Stability",
                     min_value=0.0,
                     max_value=1.0,
-                    value=0.65,
+                    value=saved_settings.get("stability", 0.65),
                     step=0.05,
                     help="Lower = more variation, Higher = more consistent. 0.65 = balanced natural variation"
                 )
@@ -315,7 +609,7 @@ def main():
                     "Similarity Boost",
                     min_value=0.0,
                     max_value=1.0,
-                    value=0.85,
+                    value=saved_settings.get("similarity_boost", 0.85),
                     step=0.05,
                     help="How closely to match the cloned voice. 0.85 = tight match for PVC"
                 )
@@ -324,14 +618,14 @@ def main():
                     "Style / Expressiveness",
                     min_value=0.0,
                     max_value=1.0,
-                    value=0.4,
+                    value=saved_settings.get("style", 0.4),
                     step=0.05,
                     help="Emotional expression & naturalness. 0.4 = moderate expressiveness (recommended for PVC)"
                 )
-                
+
                 use_speaker_boost = st.checkbox(
                     "Speaker Boost",
-                    value=True,
+                    value=saved_settings.get("use_speaker_boost", True),
                     help="Boost speaker clarity"
                 )
 
@@ -418,16 +712,15 @@ def main():
 
                     st.session_state.segments = segments
                     st.session_state.translated_segments = []  # Reset translations
+                    st.session_state.source_filename = uploaded_file.name
+
+                    # Auto-save after transcription
+                    if is_db_available() and segments:
+                        if save_current_session("in_progress"):
+                            st.toast("Session auto-saved")
 
                     if segments:
                         st.success(f"Found {len(segments)} segments")
-
-                        # Show transcription preview
-                        with st.expander("Transcription Preview", expanded=True):
-                            for i, seg in enumerate(segments[:5]):  # Show first 5 segments
-                                st.write(f"**{i+1}.** [{seg['start']:.1f}s - {seg['end']:.1f}s] {seg['text']}")
-                            if len(segments) > 5:
-                                st.write(f"... and {len(segments) - 5} more segments")
                     else:
                         st.warning("No speech segments detected. Try adjusting audio volume or check for background noise.")
 
@@ -456,198 +749,232 @@ def main():
                         st.info(f"{len(short_segments)} segments are very short (<1s)")
             else:
                 st.write("No transcription yet")
-            
-            # Segments Display and Editing
-            if st.session_state.segments:
-                st.header("Transcript Editor")
-                
-                # Manual segment addition
-                with st.expander("Add Missing Segment"):
-                    st.write("If you hear speech that wasn't transcribed, you can manually add it:")
-                    
-                    col1, col2, col3 = st.columns([2, 2, 1])
-                    with col1:
-                        start_time = st.number_input(
-                            "Start time (seconds)", 
-                            min_value=0.0, 
-                            max_value=3600.0, 
-                            step=0.1,
-                            format="%.1f"
-                        )
-                    with col2:
-                        end_time = st.number_input(
-                            "End time (seconds)", 
-                            min_value=start_time, 
-                            max_value=3600.0, 
-                            step=0.1,
-                            format="%.1f"
-                        )
-                    with col3:
-                        if st.button("Add Segment"):
-                            if end_time > start_time:
-                                new_segment = {
-                                    "start": start_time,
-                                    "end": end_time,
-                                    "text": "[Manual segment - add Swedish text below]"
-                                }
-                                
-                                # Insert in correct time order
-                                inserted = False
-                                for i, seg in enumerate(st.session_state.segments):
-                                    if start_time < seg["start"]:
-                                        st.session_state.segments.insert(i, new_segment)
-                                        inserted = True
-                                        break
-                                
-                                if not inserted:
-                                    st.session_state.segments.append(new_segment)
-                                
-                                st.success("Segment added!")
-                                st.rerun()
-                            else:
-                                st.error("End time must be after start time")
-                
-                # Create editable dataframe
-                df = create_segments_dataframe(st.session_state.segments)
-                
-                # Add segment management controls
-                col1, col2 = st.columns([1, 1])
-                with col1:
-                    st.write(f"**Total segments:** {len(df)}")
-                with col2:
-                    if st.button("Reset All Segments"):
-                        if st.session_state.get('confirm_reset', False):
-                            st.session_state.segments = []
-                            st.session_state.translated_segments = []
-                            st.session_state.confirm_reset = False
-                            st.success("All segments cleared!")
-                            st.rerun()
-                        else:
-                            st.session_state.confirm_reset = True
-                            st.warning("Click again to confirm reset")
-                
-                edited_df = st.data_editor(
-                    df,
-                    column_config={
-                        "Start": st.column_config.TextColumn("Start", disabled=True),
-                        "End": st.column_config.TextColumn("End", disabled=True),
-                        "Swedish": st.column_config.TextColumn("Swedish", width="large"),
-                        "English": st.column_config.TextColumn("English", width="large")
-                    },
-                    hide_index=True,
-                    use_container_width=True,
-                    num_rows="dynamic"  # Allow adding/removing rows
+
+    # Show loaded session info if no file uploaded but session has data
+    if uploaded_file is None and st.session_state.segments:
+        st.info(f"**Loaded session:** {st.session_state.session_name or 'Unnamed'} - {len(st.session_state.segments)} segments")
+
+    # Segments Display and Editing - show if we have segments (from upload OR loaded session)
+    if st.session_state.segments:
+        st.header("Transcript Editor")
+
+        # Manual segment addition
+        with st.expander("Add Missing Segment"):
+            st.write("If you hear speech that wasn't transcribed, you can manually add it:")
+
+            col1, col2, col3 = st.columns([2, 2, 1])
+            with col1:
+                start_time = st.number_input(
+                    "Start time (seconds)",
+                    min_value=0.0,
+                    max_value=3600.0,
+                    step=0.1,
+                    format="%.1f"
                 )
+            with col2:
+                end_time = st.number_input(
+                    "End time (seconds)",
+                    min_value=start_time,
+                    max_value=3600.0,
+                    step=0.1,
+                    format="%.1f"
+                )
+            with col3:
+                if st.button("Add Segment"):
+                    if end_time > start_time:
+                        new_segment = {
+                            "start": start_time,
+                            "end": end_time,
+                            "text": "[Manual segment - add Swedish text below]"
+                        }
 
-                # Timing info
-                st.info("**Note:** Timing shows original Swedish audio. Natural pauses (min 150ms) are automatically added between segments during voice generation.")
+                        # Insert in correct time order
+                        inserted = False
+                        for i, seg in enumerate(st.session_state.segments):
+                            if start_time < seg["start"]:
+                                st.session_state.segments.insert(i, new_segment)
+                                inserted = True
+                                break
 
-                # Translation
-                st.header("Translation")
-                col1, col2 = st.columns([1, 3])
-                        
-                with col1:
-                    if st.button("Translate All", type="primary", disabled=not translation_service):
-                        with st.spinner(f"Translating with {translation_service.upper()}..."):
-                            try:
-                                # Update segments from edited dataframe first (to preserve deletions/edits)
-                                updated_segments = []
-                                for i, (_, row) in enumerate(edited_df.iterrows()):
-                                    if i < len(st.session_state.segments):
-                                        seg = st.session_state.segments[i].copy()
-                                        seg["text"] = row["Swedish"]
-                                        updated_segments.append(seg)
+                        if not inserted:
+                            st.session_state.segments.append(new_segment)
 
-                                # Update session state with edited segments
-                                st.session_state.segments = updated_segments
+                        st.success("Segment added!")
+                        st.rerun()
+                    else:
+                        st.error("End time must be after start time")
 
-                                # Now translate the updated segments
-                                translated = translate_segments(
-                                    updated_segments,
-                                    service=translation_service,
-                                    working_dir=st.session_state.working_dir
-                                )
-                                st.session_state.translated_segments = translated
-                                st.success(f"Translated {len(translated)} segments")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Translation failed: {str(e)}")
-                
-                with col2:
-                    if st.session_state.translated_segments:
-                        st.write(f"**{len(st.session_state.translated_segments)} segments translated**")
-                
-                # TTS Generation
-                st.header("Text-to-Speech")
-                col1, col2 = st.columns([1, 3])
-                
-                with col1:
-                    tts_ready = (eleven_key and eleven_voice and 
-                               len(edited_df) > 0 and 
-                               edited_df["English"].notna().any())
-                    
-                    if st.button("Generate Voice", type="primary", disabled=not tts_ready):
-                        with st.spinner("Generating TTS with natural timing and audio normalization..."):
-                            try:
-                                # Use edited text from dataframe (preserves deletions/edits)
-                                updated_segments = []
-                                for i, (_, row) in enumerate(edited_df.iterrows()):
-                                    if i < len(st.session_state.segments):
-                                        seg = st.session_state.segments[i].copy()
-                                        seg["text"] = row["Swedish"]
-                                        seg["english"] = row["English"] or ""
-                                        updated_segments.append(seg)
+        # Create editable dataframe
+        df = create_segments_dataframe(st.session_state.segments)
 
-                                # Update session state with edited segments
-                                st.session_state.segments = updated_segments
-                                st.session_state.translated_segments = updated_segments
+        # Add segment management controls
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            st.write(f"**Total segments:** {len(df)}")
+        with col2:
+            if st.button("Reset All Segments"):
+                if st.session_state.get('confirm_reset', False):
+                    st.session_state.segments = []
+                    st.session_state.translated_segments = []
+                    st.session_state.confirm_reset = False
+                    st.success("All segments cleared!")
+                    st.rerun()
+                else:
+                    st.session_state.confirm_reset = True
+                    st.warning("Click again to confirm reset")
 
-                                # Generate TTS for each segment with custom settings
-                                voice_settings = getattr(st.session_state, 'voice_settings', {})
-                                audio_files = generate_tts(
-                                    updated_segments,
-                                    working_dir=st.session_state.working_dir,
-                                    voice_settings=voice_settings
-                                )
-                                
-                                # Stitch segments with proper timing
-                                final_path = stitch_segments(
-                                    updated_segments,
-                                    audio_files,
-                                    st.session_state.working_dir
-                                )
-                                
-                                st.session_state.final_audio_path = final_path
-                                st.success("Audio generation complete!")
-                                st.rerun()
-                                
-                            except Exception as e:
-                                st.error(f"TTS generation failed: {str(e)}")
-                
-                with col2:
-                    if not tts_ready and not (eleven_key and eleven_voice):
-                        st.warning("ElevenLabs API configuration required")
-                    elif not tts_ready:
-                        st.info("Add English translations to generate voice")
-                
-                # Final Audio Player
-                if st.session_state.final_audio_path and Path(st.session_state.final_audio_path).exists():
-                    st.header("Final Audio")
-                    
-                    with open(st.session_state.final_audio_path, "rb") as f:
-                        audio_bytes = f.read()
-                    
-                    col1, col2 = st.columns([2, 1])
-                    with col1:
-                        st.audio(audio_bytes, format="audio/wav")
-                    
-                    with col2:
-                        st.download_button(
-                            label="Download Audio",
-                            data=audio_bytes,
-                            file_name="translated_audio.wav",
-                            mime="audio/wav"
+        edited_df = st.data_editor(
+            df,
+            column_config={
+                "Start": st.column_config.TextColumn("Start", disabled=True),
+                "End": st.column_config.TextColumn("End", disabled=True),
+                "Swedish": st.column_config.TextColumn("Swedish", width="large"),
+                "English": st.column_config.TextColumn("English", width="large")
+            },
+            hide_index=True,
+            use_container_width=True,
+            num_rows="dynamic"  # Allow adding/removing rows
+        )
+
+        # Save table edits button
+        if st.button("Save Table Changes", help="Save your manual edits to Swedish/English text"):
+            # Sync edited dataframe back to session state
+            updated_segments = []
+            for i, (_, row) in enumerate(edited_df.iterrows()):
+                if i < len(st.session_state.segments):
+                    seg = st.session_state.segments[i].copy()
+                    seg["text"] = row["Swedish"]
+                    seg["english"] = row["English"] if pd.notna(row["English"]) else ""
+                    updated_segments.append(seg)
+
+            st.session_state.segments = updated_segments
+            st.session_state.translated_segments = [s for s in updated_segments if s.get("english")]
+
+            # Save to database
+            if is_db_available():
+                if save_current_session():
+                    st.success("Changes saved!")
+                else:
+                    st.error("Failed to save")
+            else:
+                st.success("Changes saved to session!")
+            st.rerun()
+
+        # Timing info
+        st.info("**Note:** Timing shows original Swedish audio. Natural pauses (min 150ms) are automatically added between segments during voice generation.")
+
+        # Translation
+        st.header("Translation")
+        col1, col2 = st.columns([1, 3])
+
+        with col1:
+            if st.button("Translate All", type="primary", disabled=not translation_service):
+                with st.spinner(f"Translating with {translation_service.upper()}..."):
+                    try:
+                        # Update segments from edited dataframe first (to preserve deletions/edits)
+                        updated_segments = []
+                        for i, (_, row) in enumerate(edited_df.iterrows()):
+                            if i < len(st.session_state.segments):
+                                seg = st.session_state.segments[i].copy()
+                                seg["text"] = row["Swedish"]
+                                updated_segments.append(seg)
+
+                        # Update session state with edited segments
+                        st.session_state.segments = updated_segments
+
+                        # Now translate the updated segments
+                        translated = translate_segments(
+                            updated_segments,
+                            service=translation_service,
+                            working_dir=st.session_state.working_dir
                         )
+                        st.session_state.translated_segments = translated
+                        st.success(f"Translated {len(translated)} segments")
+
+                        # Auto-save after translation
+                        if is_db_available():
+                            if save_current_session("in_progress"):
+                                st.toast("Session auto-saved")
+
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Translation failed: {str(e)}")
+
+        with col2:
+            if st.session_state.translated_segments:
+                st.write(f"**{len(st.session_state.translated_segments)} segments translated**")
+
+        # TTS Generation
+        st.header("Text-to-Speech")
+        col1, col2 = st.columns([1, 3])
+
+        with col1:
+            tts_ready = (eleven_key and eleven_voice and
+                       len(edited_df) > 0 and
+                       edited_df["English"].notna().any())
+
+            if st.button("Generate Voice", type="primary", disabled=not tts_ready):
+                with st.spinner("Generating TTS with natural timing and audio normalization..."):
+                    try:
+                        # Use edited text from dataframe (preserves deletions/edits)
+                        updated_segments = []
+                        for i, (_, row) in enumerate(edited_df.iterrows()):
+                            if i < len(st.session_state.segments):
+                                seg = st.session_state.segments[i].copy()
+                                seg["text"] = row["Swedish"]
+                                seg["english"] = row["English"] or ""
+                                updated_segments.append(seg)
+
+                        # Update session state with edited segments
+                        st.session_state.segments = updated_segments
+                        st.session_state.translated_segments = updated_segments
+
+                        # Generate TTS for each segment with custom settings
+                        voice_settings = getattr(st.session_state, 'voice_settings', {})
+                        audio_files = generate_tts(
+                            updated_segments,
+                            working_dir=st.session_state.working_dir,
+                            voice_settings=voice_settings
+                        )
+
+                        # Stitch segments with proper timing
+                        final_path = stitch_segments(
+                            updated_segments,
+                            audio_files,
+                            st.session_state.working_dir
+                        )
+
+                        st.session_state.final_audio_path = final_path
+                        st.success("Audio generation complete!")
+                        st.rerun()
+
+                    except Exception as e:
+                        st.error(f"TTS generation failed: {str(e)}")
+
+        with col2:
+            if not tts_ready and not (eleven_key and eleven_voice):
+                st.warning("ElevenLabs API configuration required")
+            elif not tts_ready:
+                st.info("Add English translations to generate voice")
+
+        # Final Audio Player
+        if st.session_state.final_audio_path and Path(st.session_state.final_audio_path).exists():
+            st.header("Final Audio")
+
+            with open(st.session_state.final_audio_path, "rb") as f:
+                audio_bytes = f.read()
+
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                st.audio(audio_bytes, format="audio/wav")
+
+            with col2:
+                st.download_button(
+                    label="Download Audio",
+                    data=audio_bytes,
+                    file_name="translated_audio.wav",
+                    mime="audio/wav"
+                )
 
     # Troubleshooting Section
     with st.expander("Troubleshooting"):
