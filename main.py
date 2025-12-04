@@ -825,8 +825,8 @@ def main():
                     else:
                         st.error("End time must be after start time")
 
-        # Create editable dataframe - only recreate when segments change
-        segments_hash = hash(str(st.session_state.segments))
+        # Create editable dataframe - only recreate when segments or translations change
+        segments_hash = hash(str(st.session_state.segments) + str(st.session_state.translated_segments))
         if "editor_df" not in st.session_state or st.session_state.get("editor_segments_hash") != segments_hash:
             st.session_state.editor_df = create_segments_dataframe(st.session_state.segments)
             st.session_state.editor_segments_hash = segments_hash
@@ -941,6 +941,9 @@ def main():
                             working_dir=st.session_state.working_dir
                         )
                         st.session_state.translated_segments = translated
+                        # Clear editor_df so it gets recreated with translations
+                        st.session_state.editor_df = None
+                        st.session_state.editor_segments_hash = None
                         st.success(f"Translated {len(translated)} segments")
 
                         # Auto-save after translation
