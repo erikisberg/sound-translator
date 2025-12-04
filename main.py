@@ -25,10 +25,7 @@ from audio_utils import (
 )
 from session_manager import (
     Session,
-    SessionManager,
     get_session_manager,
-    export_session_json,
-    import_session_json,
     generate_session_name
 )
 from database import is_db_available
@@ -286,137 +283,25 @@ def main():
                 else:
                     st.info("No saved sessions yet")
 
-            # Export/Import
-            with st.expander("Export / Import"):
-                # Export current session
-                if st.session_state.segments:
-                    session_for_export = Session(
-                        id=st.session_state.current_session_id or "export",
-                        name=st.session_state.session_name or "Exported Session",
-                        source_filename=st.session_state.source_filename,
-                        segments=[
-                            {
-                                "start": seg.get("start"),
-                                "end": seg.get("end"),
-                                "text": seg.get("text", ""),
-                                "english": seg.get("english", ""),
-                            }
-                            for seg in st.session_state.translated_segments or st.session_state.segments
-                        ],
-                    )
-                    export_json = export_session_json(session_for_export)
-                    st.download_button(
-                        "Export Session (JSON)",
-                        data=export_json,
-                        file_name=f"{st.session_state.session_name or 'session'}.json",
-                        mime="application/json",
-                        use_container_width=True
-                    )
-
-                # Import session
-                uploaded_session = st.file_uploader(
-                    "Import Session",
-                    type=["json"],
-                    help="Upload a previously exported session file",
-                    key="import_session_file"
-                )
-                if uploaded_session:
-                    try:
-                        json_content = uploaded_session.read().decode("utf-8")
-                        imported = import_session_json(json_content)
-                        if imported:
-                            load_session_into_state(imported)
-                            # Save imported session to DB
-                            if save_current_session():
-                                st.success(f"Imported: {imported.name}")
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"Import failed: {e}")
-
         else:
             st.warning("Database not configured. Sessions will not be saved.")
             st.caption("Add DATABASE_URL to secrets.toml to enable session storage.")
 
-            # Still allow export/import without DB
-            with st.expander("Export / Import"):
-                if st.session_state.segments:
-                    session_for_export = Session(
-                        name=st.session_state.session_name or "Exported Session",
-                        source_filename=st.session_state.source_filename,
-                        segments=[
-                            {
-                                "start": seg.get("start"),
-                                "end": seg.get("end"),
-                                "text": seg.get("text", ""),
-                                "english": seg.get("english", ""),
-                            }
-                            for seg in st.session_state.translated_segments or st.session_state.segments
-                        ],
-                    )
-                    export_json = export_session_json(session_for_export)
-                    st.download_button(
-                        "Export Session (JSON)",
-                        data=export_json,
-                        file_name=f"{st.session_state.session_name or 'session'}.json",
-                        mime="application/json",
-                        use_container_width=True
-                    )
-
-                uploaded_session = st.file_uploader(
-                    "Import Session",
-                    type=["json"],
-                    key="import_session_no_db"
-                )
-                if uploaded_session:
-                    try:
-                        json_content = uploaded_session.read().decode("utf-8")
-                        imported = import_session_json(json_content)
-                        if imported:
-                            load_session_into_state(imported)
-                            st.success(f"Imported: {imported.name}")
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"Import failed: {e}")
-
         st.divider()
 
-        # API Key Status
-        st.header("API Configuration")
-        
-        # Check API keys
+        # Check API keys (needed for later logic)
         openai_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
         deepl_key = st.secrets.get("DEEPL_API_KEY") or os.getenv("DEEPL_API_KEY")
         eleven_key = st.secrets.get("ELEVEN_API_KEY") or os.getenv("ELEVEN_API_KEY")
         eleven_voice = st.secrets.get("ELEVEN_VOICE_ID") or os.getenv("ELEVEN_VOICE_ID")
-        
-        st.write("**Transcription Service:**")
-        if openai_key:
-            st.success("OpenAI API Key found (Whisper API available)")
-        else:
-            st.warning("OpenAI API Key not found - only local transcription available")
 
-        st.write("**Translation Service:**")
+        # Determine translation service
         if deepl_key:
-            st.success("DeepL API Key found")
             translation_service = "deepl"
         elif openai_key:
-            st.success("OpenAI API Key found")
             translation_service = "openai"
         else:
-            st.error("No translation API key found")
             translation_service = None
-
-        st.write("**TTS Service:**")
-        if eleven_key:
-            st.success("ElevenLabs API Key found")
-            if eleven_voice:
-                st.success(f"Voice ID: {eleven_voice}")
-            else:
-                st.warning("Voice ID not configured")
-        else:
-            st.error("ElevenLabs API key missing")
-            
-        st.write(f"**Working Directory:** `{st.session_state.working_dir}`")
 
         # Transcription Settings
         st.header("Transcription Settings")
@@ -669,6 +554,31 @@ def main():
                     st.write(f"**Similarity:** {similarity_boost:.2f}")
                     st.write(f"**Style:** {style:.2f}")
                     st.write(f"**Model:** {voice_model}")
+
+        # API Configuration (status) - at bottom of sidebar
+        st.divider()
+        with st.expander("API Configuration"):
+            st.write("**Transcription:**")
+            if openai_key:
+                st.success("OpenAI API Key found")
+            else:
+                st.warning("OpenAI not configured")
+
+            st.write("**Translation:**")
+            if deepl_key:
+                st.success("DeepL API Key found")
+            elif openai_key:
+                st.success("OpenAI API Key found")
+            else:
+                st.error("No translation API")
+
+            st.write("**TTS:**")
+            if eleven_key:
+                st.success("ElevenLabs API Key found")
+                if eleven_voice:
+                    st.caption(f"Voice: {eleven_voice}")
+            else:
+                st.error("ElevenLabs not configured")
 
     # File Upload
     st.header("Upload Audio File")
