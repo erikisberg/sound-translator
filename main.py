@@ -845,7 +845,9 @@ def main():
                     updated_segments.append(seg)
 
             st.session_state.segments = updated_segments
-            st.session_state.translated_segments = [s for s in updated_segments if s.get("english")]
+            # Keep all segments in translated_segments (not just those with english)
+            # so that save_current_session() saves the edited Swedish text too
+            st.session_state.translated_segments = updated_segments
 
             # Save to database
             if is_db_available():
