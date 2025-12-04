@@ -815,62 +815,93 @@ def main():
                     st.session_state.confirm_reset = True
                     st.warning("Click again to confirm reset")
 
-        # Individual text fields per segment (more reliable than data_editor)
-        st.markdown("---")
-
-        # Track if any changes were made
-        changes_made = False
-        updated_segments = []
-
+        # Build table data for display
+        import pandas as pd
+        table_data = []
         for i, seg in enumerate(st.session_state.segments):
-            with st.expander(f"Segment {i+1}: {format_time(seg['start'])} - {format_time(seg['end'])}", expanded=False):
-                col_swe, col_eng = st.columns(2)
+            english = seg.get("english", "")
+            # Get from translated_segments if available
+            if i < len(st.session_state.translated_segments):
+                english = st.session_state.translated_segments[i].get("english", "") or english
+            table_data.append({
+                "#": i + 1,
+                "Start": format_time(seg["start"]),
+                "End": format_time(seg["end"]),
+                "Swedish": seg.get("text", "")[:80] + ("..." if len(seg.get("text", "")) > 80 else ""),
+                "English": (english[:80] + "...") if len(english) > 80 else english
+            })
 
-                with col_swe:
-                    new_swedish = st.text_area(
-                        "Swedish",
-                        value=seg.get("text", ""),
-                        key=f"swedish_{i}",
-                        height=100
-                    )
+        # Display as static table
+        if table_data:
+            df = pd.DataFrame(table_data)
+            st.dataframe(df, use_container_width=True, hide_index=True)
 
-                with col_eng:
-                    new_english = st.text_area(
-                        "English",
-                        value=seg.get("english", ""),
-                        key=f"english_{i}",
-                        height=100
-                    )
+        # Segment editor below the table
+        st.markdown("---")
+        st.subheader("Edit Segment")
 
-                # Check if changed
-                if new_swedish != seg.get("text", "") or new_english != seg.get("english", ""):
-                    changes_made = True
-
-                # Build updated segment
-                updated_seg = seg.copy()
-                updated_seg["text"] = new_swedish
-                updated_seg["english"] = new_english
-                updated_segments.append(updated_seg)
-
-        # Show save button if there are segments
         if st.session_state.segments:
-            if changes_made:
-                st.info("You have unsaved changes.")
+            # Segment selector
+            segment_options = [f"{i+1}: {format_time(seg['start'])} - {seg.get('text', '')[:30]}..."
+                             for i, seg in enumerate(st.session_state.segments)]
 
-            if st.button("Save All Changes", type="primary"):
-                st.session_state.segments = updated_segments
-                st.session_state.translated_segments = updated_segments
+            selected_idx = st.selectbox(
+                "Select segment to edit",
+                range(len(st.session_state.segments)),
+                format_func=lambda i: segment_options[i],
+                key="edit_segment_idx"
+            )
 
-                logger.info(f"Saved {len(updated_segments)} segments")
+            # Get current segment data
+            current_seg = st.session_state.segments[selected_idx]
+            current_english = current_seg.get("english", "")
+            if selected_idx < len(st.session_state.translated_segments):
+                current_english = st.session_state.translated_segments[selected_idx].get("english", "") or current_english
+
+            # Edit fields
+            col1, col2 = st.columns(2)
+            with col1:
+                new_swedish = st.text_area(
+                    "Swedish",
+                    value=current_seg.get("text", ""),
+                    height=150,
+                    key="edit_swedish"
+                )
+            with col2:
+                new_english = st.text_area(
+                    "English",
+                    value=current_english,
+                    height=150,
+                    key="edit_english"
+                )
+
+            # Save button for this segment
+            if st.button("Save Segment", type="primary"):
+                # Update the segment
+                st.session_state.segments[selected_idx]["text"] = new_swedish
+                st.session_state.segments[selected_idx]["english"] = new_english
+
+                # Also update translated_segments
+                if selected_idx < len(st.session_state.translated_segments):
+                    st.session_state.translated_segments[selected_idx]["text"] = new_swedish
+                    st.session_state.translated_segments[selected_idx]["english"] = new_english
+                else:
+                    # Extend translated_segments if needed
+                    while len(st.session_state.translated_segments) <= selected_idx:
+                        st.session_state.translated_segments.append({})
+                    st.session_state.translated_segments[selected_idx] = {
+                        **st.session_state.segments[selected_idx],
+                        "english": new_english
+                    }
 
                 # Save to database
                 if is_db_available():
                     if save_current_session():
-                        st.success("Changes saved!")
+                        st.success(f"Segment {selected_idx + 1} saved!")
                     else:
-                        st.error("Failed to save to database")
+                        st.error("Failed to save")
                 else:
-                    st.success("Changes saved to session!")
+                    st.success(f"Segment {selected_idx + 1} saved!")
                 st.rerun()
 
         # Timing info
