@@ -140,6 +140,7 @@ def load_session_into_state(session: Session) -> None:
 
     st.session_state.current_session_id = session.id
     st.session_state.session_name = session.name
+    st.session_state.session_name_input = session.name  # Also update widget state
     st.session_state.source_filename = session.source_filename
     st.session_state.last_saved_at = session.updated_at
 
@@ -196,18 +197,22 @@ def main():
         db_available = is_db_available()
 
         if db_available:
-            # Session name input - always sync from text input
-            current_name = st.session_state.session_name or generate_session_name(st.session_state.source_filename)
+            # Initialize session_name_input widget state if needed
+            if "session_name_input" not in st.session_state:
+                default_name = st.session_state.session_name or generate_session_name(st.session_state.source_filename)
+                st.session_state.session_name_input = default_name
+                logger.debug(f"Initialized session_name_input to: '{default_name}'")
+
+            # Session name input - uses widget key for state
             session_name = st.text_input(
                 "Session Name",
-                value=current_name,
                 help="Name for this translation session",
                 key="session_name_input"
             )
-            # Always update session_state with the input value
+
+            # Sync widget value back to session_name
             if session_name:
                 st.session_state.session_name = session_name
-                logger.debug(f"Session name updated to: '{session_name}'")
 
             # Save status indicator
             if st.session_state.last_saved_at:
