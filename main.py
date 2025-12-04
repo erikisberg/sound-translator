@@ -14,6 +14,7 @@ import logging
 import uuid
 from pathlib import Path
 from typing import List, Dict, Any
+import pandas as pd
 from dotenv import load_dotenv
 
 from audio_utils import (
@@ -38,11 +39,25 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-def format_time(seconds: float) -> str:
-    """Format seconds as MM:SS.ms"""
-    mins = int(seconds // 60)
-    secs = seconds % 60
-    return f"{mins}:{secs:05.2f}"
+def create_segments_dataframe(segments: List[Dict[str, Any]]) -> pd.DataFrame:
+    """Create a DataFrame from segments for editing."""
+    if not segments:
+        return pd.DataFrame(columns=["Start", "End", "Swedish", "English"])
+
+    df_data = []
+    for i, seg in enumerate(segments):
+        english_text = ""
+        if i < len(st.session_state.translated_segments):
+            english_text = st.session_state.translated_segments[i].get("english", "")
+
+        df_data.append({
+            "Start": f"{seg['start']:.2f}s",
+            "End": f"{seg['end']:.2f}s",
+            "Swedish": seg["text"],
+            "English": english_text
+        })
+
+    return pd.DataFrame(df_data)
 
 # App configuration
 st.set_page_config(
@@ -799,10 +814,13 @@ def main():
                     else:
                         st.error("End time must be after start time")
 
-        # Segment management controls
+        # Create editable dataframe
+        df = create_segments_dataframe(st.session_state.segments)
+
+        # Add segment management controls
         col1, col2 = st.columns([1, 1])
         with col1:
-            st.write(f"**Total segments:** {len(st.session_state.segments)}")
+            st.write(f"**Total segments:** {len(df)}")
         with col2:
             if st.button("Reset All Segments"):
                 if st.session_state.get('confirm_reset', False):
@@ -815,73 +833,42 @@ def main():
                     st.session_state.confirm_reset = True
                     st.warning("Click again to confirm reset")
 
-        # Scrollable container with text fields for all segments
-        st.markdown("**Edit segments** (scroll to see all):")
+        edited_df = st.data_editor(
+            df,
+            column_config={
+                "Start": st.column_config.TextColumn("Start", disabled=True),
+                "End": st.column_config.TextColumn("End", disabled=True),
+                "Swedish": st.column_config.TextColumn("Swedish", width="large"),
+                "English": st.column_config.TextColumn("English", width="large")
+            },
+            hide_index=True,
+            use_container_width=True,
+            num_rows="dynamic"
+        )
 
-        # Header row
-        header_cols = st.columns([0.5, 1, 4, 4])
-        header_cols[0].write("**#**")
-        header_cols[1].write("**Time**")
-        header_cols[2].write("**Swedish**")
-        header_cols[3].write("**English**")
+        # Save table edits button
+        if st.button("Save Table Changes", help="Save your manual edits to Swedish/English text"):
+            # Sync edited dataframe back to session state
+            updated_segments = []
+            for i, (_, row) in enumerate(edited_df.iterrows()):
+                if i < len(st.session_state.segments):
+                    seg = st.session_state.segments[i].copy()
+                    seg["text"] = row["Swedish"]
+                    seg["english"] = row["English"] if pd.notna(row["English"]) else ""
+                    updated_segments.append(seg)
 
-        # Collect all edits
-        edited_segments = []
+            st.session_state.segments = updated_segments
+            st.session_state.translated_segments = [s for s in updated_segments if s.get("english")]
 
-        # Scrollable container
-        with st.container(height=400):
-            for i, seg in enumerate(st.session_state.segments):
-                # Get current english text
-                current_english = seg.get("english", "")
-                if i < len(st.session_state.translated_segments):
-                    current_english = st.session_state.translated_segments[i].get("english", "") or current_english
-
-                cols = st.columns([0.5, 1, 4, 4])
-
-                # Segment number and time (read-only)
-                cols[0].write(f"**{i+1}**")
-                cols[1].write(f"{format_time(seg['start'])}")
-
-                # Editable text fields
-                new_swedish = cols[2].text_area(
-                    f"Swedish {i+1}",
-                    value=seg.get("text", ""),
-                    key=f"sv_{i}",
-                    height=68,
-                    label_visibility="collapsed"
-                )
-                new_english = cols[3].text_area(
-                    f"English {i+1}",
-                    value=current_english,
-                    key=f"en_{i}",
-                    height=68,
-                    label_visibility="collapsed"
-                )
-
-                # Store edited data
-                edited_seg = seg.copy()
-                edited_seg["text"] = new_swedish
-                edited_seg["english"] = new_english
-                edited_segments.append(edited_seg)
-
-        # Save all button
-        if st.session_state.segments:
-            if st.button("Save All Changes", type="primary"):
-                # Update session state
-                st.session_state.segments = edited_segments
-                st.session_state.translated_segments = edited_segments
-
-                logger.info(f"Saved {len(edited_segments)} segments")
-
-                # Save to database
-                if is_db_available():
-                    if save_current_session():
-                        st.success("All changes saved!")
-                    else:
-                        st.error("Failed to save to database")
+            # Save to database
+            if is_db_available():
+                if save_current_session():
+                    st.success("Changes saved!")
                 else:
-                    st.success("All changes saved!")
-                st.rerun()
+                    st.error("Failed to save")
+            else:
+                st.success("Changes saved to session!")
+            st.rerun()
 
         # Timing info
         st.info("**Note:** Timing shows original Swedish audio. Natural pauses (min 150ms) are automatically added between segments during voice generation.")
