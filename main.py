@@ -750,9 +750,6 @@ def main():
             else:
                 st.write("No transcription yet")
 
-    # Show loaded session info if no file uploaded but session has data
-    if uploaded_file is None and st.session_state.segments:
-        st.info(f"**Loaded session:** {st.session_state.session_name or 'Unnamed'} - {len(st.session_state.segments)} segments")
 
     # Segments Display and Editing - show if we have segments (from upload OR loaded session)
     if st.session_state.segments:
