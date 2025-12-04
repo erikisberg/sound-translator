@@ -14,7 +14,6 @@ import logging
 import uuid
 from pathlib import Path
 from typing import List, Dict, Any
-import pandas as pd
 from dotenv import load_dotenv
 
 from audio_utils import (
@@ -163,26 +162,6 @@ def load_session_into_state(session: Session) -> None:
             st.session_state.voice_settings = session.settings["voice_settings"]
 
 
-def create_segments_dataframe(segments: List[Dict[str, Any]]) -> pd.DataFrame:
-    """Create a DataFrame from segments for editing."""
-    if not segments:
-        return pd.DataFrame(columns=["Start", "End", "Swedish", "English"])
-    
-    df_data = []
-    for i, seg in enumerate(segments):
-        english_text = ""
-        if i < len(st.session_state.translated_segments):
-            english_text = st.session_state.translated_segments[i].get("english", "")
-        
-        df_data.append({
-            "Start": f"{seg['start']:.2f}s",
-            "End": f"{seg['end']:.2f}s", 
-            "Swedish": seg["text"],
-            "English": english_text
-        })
-    
-    return pd.DataFrame(df_data)
-
 def main():
     """Main Streamlit application."""
     init_session_state()
@@ -197,28 +176,18 @@ def main():
         db_available = is_db_available()
 
         if db_available:
-            # Session name input - use session_name as source of truth
-            current_name = st.session_state.session_name or generate_session_name(st.session_state.source_filename)
+            # Auto-generate session name (no manual input)
+            if not st.session_state.session_name:
+                st.session_state.session_name = generate_session_name(st.session_state.source_filename)
 
-            # Use a callback to update session_name when input changes
-            def on_name_change():
-                st.session_state.session_name = st.session_state.session_name_widget
-
-            session_name = st.text_input(
-                "Session Name",
-                value=current_name,
-                help="Name for this translation session",
-                key="session_name_widget",
-                on_change=on_name_change
-            )
-
-            # Save status indicator
+            # Display session info
+            st.write(f"**{st.session_state.session_name}**")
             if st.session_state.last_saved_at:
-                st.caption(f"Last saved: {st.session_state.last_saved_at[:19]}")
+                st.caption(f"Saved: {st.session_state.last_saved_at[:19]}")
             elif st.session_state.current_session_id:
                 st.caption("Session active")
             else:
-                st.caption("New session (not saved)")
+                st.caption("New session")
 
             # Session action buttons
             col1, col2 = st.columns(2)
@@ -734,6 +703,8 @@ def main():
                     st.session_state.segments = segments
                     st.session_state.translated_segments = []  # Reset translations
                     st.session_state.source_filename = uploaded_file.name
+                    # Update session name based on new filename
+                    st.session_state.session_name = generate_session_name(uploaded_file.name)
 
                     # Auto-save after transcription
                     if is_db_available() and segments:
@@ -822,13 +793,10 @@ def main():
                     else:
                         st.error("End time must be after start time")
 
-        # Create dataframe from segments
-        df = create_segments_dataframe(st.session_state.segments)
-
-        # Add segment management controls
+        # Segment management controls
         col1, col2 = st.columns([1, 1])
         with col1:
-            st.write(f"**Total segments:** {len(df)}")
+            st.write(f"**Total segments:** {len(st.session_state.segments)}")
         with col2:
             if st.button("Reset All Segments"):
                 if st.session_state.get('confirm_reset', False):
@@ -841,69 +809,63 @@ def main():
                     st.session_state.confirm_reset = True
                     st.warning("Click again to confirm reset")
 
-        # Use form to capture edits before rerun
-        with st.form("segments_form"):
-            edited_df = st.data_editor(
-                df,
-                column_config={
-                    "Start": st.column_config.TextColumn("Start", disabled=True),
-                    "End": st.column_config.TextColumn("End", disabled=True),
-                    "Swedish": st.column_config.TextColumn("Swedish", width="large"),
-                    "English": st.column_config.TextColumn("English", width="large")
-                },
-                hide_index=True,
-                use_container_width=True,
-                num_rows="dynamic"  # Allow adding/removing rows
-            )
+        # Individual text fields per segment (more reliable than data_editor)
+        st.markdown("---")
 
-            # Save button inside form
-            submitted = st.form_submit_button("Save Table Changes", help="Save your manual edits to Swedish/English text")
+        # Track if any changes were made
+        changes_made = False
+        updated_segments = []
 
-        # Handle form submission
-        if submitted:
-            # Sync edited dataframe back to session state
-            logger.info(f"Save Table Changes clicked: edited_df has {len(edited_df)} rows, "
-                       f"session_state.segments has {len(st.session_state.segments)} segments")
+        for i, seg in enumerate(st.session_state.segments):
+            with st.expander(f"Segment {i+1}: {format_time(seg['start'])} - {format_time(seg['end'])}", expanded=False):
+                col_swe, col_eng = st.columns(2)
 
-            # Log first segment before and after for debugging
-            if len(st.session_state.segments) > 0:
-                logger.info(f"Before update - segment[0].text: '{st.session_state.segments[0].get('text', '')[:50]}...'")
+                with col_swe:
+                    new_swedish = st.text_area(
+                        "Swedish",
+                        value=seg.get("text", ""),
+                        key=f"swedish_{i}",
+                        height=100
+                    )
 
-            # Log what edited_df actually contains
-            if len(edited_df) > 0:
-                logger.info(f"edited_df[0].Swedish: '{str(edited_df.iloc[0]['Swedish'])[:50]}...'")
+                with col_eng:
+                    new_english = st.text_area(
+                        "English",
+                        value=seg.get("english", ""),
+                        key=f"english_{i}",
+                        height=100
+                    )
 
-            updated_segments = []
-            for i, (_, row) in enumerate(edited_df.iterrows()):
-                if i < len(st.session_state.segments):
-                    seg = st.session_state.segments[i].copy()
-                    seg["text"] = row["Swedish"]
-                    seg["english"] = row["English"] if pd.notna(row["English"]) else ""
-                    updated_segments.append(seg)
+                # Check if changed
+                if new_swedish != seg.get("text", "") or new_english != seg.get("english", ""):
+                    changes_made = True
 
-            # Log what we're about to save
-            if len(updated_segments) > 0:
-                logger.info(f"After update - updated_segments[0].text: '{updated_segments[0].get('text', '')[:50]}...'")
+                # Build updated segment
+                updated_seg = seg.copy()
+                updated_seg["text"] = new_swedish
+                updated_seg["english"] = new_english
+                updated_segments.append(updated_seg)
 
-            st.session_state.segments = updated_segments
-            # Keep all segments in translated_segments (not just those with english)
-            # so that save_current_session() saves the edited Swedish text too
-            st.session_state.translated_segments = updated_segments
+        # Show save button if there are segments
+        if st.session_state.segments:
+            if changes_made:
+                st.info("You have unsaved changes.")
 
-            logger.info(f"Updated session_state: segments={len(st.session_state.segments)}, "
-                       f"translated_segments={len(st.session_state.translated_segments)}")
+            if st.button("Save All Changes", type="primary"):
+                st.session_state.segments = updated_segments
+                st.session_state.translated_segments = updated_segments
 
-            # Save to database
-            if is_db_available():
-                if save_current_session():
-                    st.success("Changes saved!")
-                    logger.info("Save Table Changes: Successfully saved to database")
+                logger.info(f"Saved {len(updated_segments)} segments")
+
+                # Save to database
+                if is_db_available():
+                    if save_current_session():
+                        st.success("Changes saved!")
+                    else:
+                        st.error("Failed to save to database")
                 else:
-                    st.error("Failed to save")
-                    logger.error("Save Table Changes: Failed to save to database")
-            else:
-                st.success("Changes saved to session!")
-            st.rerun()
+                    st.success("Changes saved to session!")
+                st.rerun()
 
         # Timing info
         st.info("**Note:** Timing shows original Swedish audio. Natural pauses (min 150ms) are automatically added between segments during voice generation.")
