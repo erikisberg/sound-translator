@@ -851,7 +851,8 @@ def main():
             },
             hide_index=True,
             use_container_width=True,
-            num_rows="dynamic"  # Allow adding/removing rows
+            num_rows="dynamic",  # Allow adding/removing rows
+            key="segments_editor"  # Persist edits between reruns
         )
 
         # Save table edits button
