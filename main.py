@@ -115,7 +115,13 @@ def save_current_session(status: str = "in_progress") -> bool:
 
     logger.info(f"save_current_session: id={session_id[:8]}..., name='{session_name}', "
                 f"session_state.session_name='{st.session_state.session_name}', "
-                f"segments={len(st.session_state.translated_segments or st.session_state.segments)}")
+                f"segments={len(st.session_state.segments)}")
+
+    # DEBUG: Log first 3 segments content for verification
+    for i, seg in enumerate(st.session_state.segments[:3]):
+        sv_text = seg.get("text", "")[:50]
+        en_text = seg.get("english", "")[:50]
+        logger.info(f"  SAVE seg[{i}]: SV='{sv_text}...' EN='{en_text}...'")
 
     session = Session(
         id=session_id,
@@ -134,7 +140,7 @@ def save_current_session(status: str = "in_progress") -> bool:
                 "text": seg.get("text", ""),
                 "english": seg.get("english", ""),
             }
-            for seg in st.session_state.translated_segments or st.session_state.segments
+            for seg in st.session_state.segments  # Always save ALL segments
         ],
     )
 
@@ -169,6 +175,12 @@ def load_session_into_state(session: Session) -> None:
 
     logger.info(f"load_session_into_state: Loaded {len(st.session_state.segments)} segments, "
                 f"session_name now='{st.session_state.session_name}'")
+
+    # DEBUG: Log first 3 segments content for verification
+    for i, seg in enumerate(st.session_state.segments[:3]):
+        sv_text = seg.get("text", "")[:50]
+        en_text = seg.get("english", "")[:50]
+        logger.info(f"  LOAD seg[{i}]: SV='{sv_text}...' EN='{en_text}...'")
 
     # Load settings
     if session.settings:
@@ -634,7 +646,9 @@ def main():
                     st.session_state.segments = segments
                     st.session_state.translated_segments = []  # Reset translations
                     st.session_state.source_filename = uploaded_file.name
-                    # Update session name based on new filename
+
+                    # Create NEW session for new file (don't overwrite existing)
+                    st.session_state.current_session_id = None
                     st.session_state.session_name = generate_session_name(uploaded_file.name)
 
                     # Auto-save after transcription
@@ -756,9 +770,8 @@ def main():
             num_rows="dynamic"
         )
 
-        # Save table edits button with instruction
-        st.caption("💡 Klicka utanför cellen efter redigering, vänta på omladdning, sedan spara.")
-        if st.button("Save Table Changes", help="Save your manual edits to Swedish/English text"):
+        # Save table edits button
+        if st.button("💾 SPARA ÄNDRINGAR", type="primary", use_container_width=True, help="Sparar dina ändringar till databasen"):
             # Sync edited dataframe back to session state
             updated_segments = []
             for i, (_, row) in enumerate(edited_df.iterrows()):
@@ -767,6 +780,13 @@ def main():
                     seg["text"] = row["Swedish"]
                     seg["english"] = row["English"] if pd.notna(row["English"]) else ""
                     updated_segments.append(seg)
+
+            # DEBUG: Log what we're saving from the table
+            logger.info(f"Save Table Changes: {len(updated_segments)} segments from dataframe")
+            for i, seg in enumerate(updated_segments[:3]):
+                sv_text = seg.get("text", "")[:50]
+                en_text = seg.get("english", "")[:50]
+                logger.info(f"  TABLE seg[{i}]: SV='{sv_text}...' EN='{en_text}...'")
 
             st.session_state.segments = updated_segments
             st.session_state.translated_segments = [s for s in updated_segments if s.get("english")]

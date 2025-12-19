@@ -881,47 +881,45 @@ def stitch_segments(
         if generated_audio.max_dBFS > float('-inf'):
             max_volume_db = max(max_volume_db, generated_audio.max_dBFS)
         
-        # Calculate timing - use start time only
-        segment_start_ms = int(segment["start"] * 1000)
-        generated_duration_ms = len(generated_audio)
-        
-        # Calculate the original gap before this segment
+        # Smart catch-up sync: sync to original timecodes, catch up during pauses
+        # Minimum natural gap between segments (breathing room)
+        MINIMUM_GAP_MS = 100
+
+        # Calculate target position from original timecode
+        target_position_ms = int(segment["start"] * 1000)
+        current_position_ms = len(final_audio)
+
         if i == 0:
-            # First segment - add gap from start of audio to first segment
-            original_gap_ms = segment_start_ms
-            if original_gap_ms > 0:
-                print(f"Adding {original_gap_ms/1000:.1f}s initial silence gap")
-                final_audio += AudioSegment.silent(duration=original_gap_ms)
+            # First segment - add initial silence if needed
+            if target_position_ms > 0:
+                print(f"Adding {target_position_ms/1000:.1f}s initial silence")
+                final_audio += AudioSegment.silent(duration=target_position_ms)
+            silence_added_ms = target_position_ms
         else:
-            # Calculate gap between previous segment end and current segment start
-            prev_segment_end_ms = int(segments[i-1]["end"] * 1000)
-            original_gap_ms = segment_start_ms - prev_segment_end_ms
+            # Calculate how much silence we need to reach target
+            silence_to_target = target_position_ms - current_position_ms
 
-            # Ensure minimum natural pause between segments (prevents rushed speech)
-            MINIMUM_GAP_MS = 150  # Natural breathing pause for short segments
-
-            if original_gap_ms >= 0:
-                # Use original gap but ensure minimum 150ms for natural speech rhythm
-                gap_to_add = max(original_gap_ms, MINIMUM_GAP_MS)
-                if gap_to_add > original_gap_ms:
-                    print(f"Original gap {original_gap_ms}ms too short, adding minimum {MINIMUM_GAP_MS}ms before segment {i+1}")
-                else:
-                    print(f"Adding {original_gap_ms/1000:.1f}s original gap before segment {i+1}")
-                final_audio += AudioSegment.silent(duration=gap_to_add)
+            if silence_to_target >= MINIMUM_GAP_MS:
+                # We have room - sync to exact timecode
+                print(f"Segment {i+1}: syncing to {target_position_ms/1000:.1f}s (+{silence_to_target/1000:.1f}s silence)")
+                final_audio += AudioSegment.silent(duration=silence_to_target)
+                silence_added_ms = silence_to_target
             else:
-                # Segments overlap in original - use minimum gap
-                print(f"Original segments overlapped by {abs(original_gap_ms)/1000:.1f}s, adding minimum {MINIMUM_GAP_MS}ms gap")
+                # We're behind or too close - add minimum gap and catch up later
+                behind_by = current_position_ms + MINIMUM_GAP_MS - target_position_ms
+                print(f"Segment {i+1}: behind by {behind_by/1000:.1f}s, adding {MINIMUM_GAP_MS}ms min gap (will catch up)")
                 final_audio += AudioSegment.silent(duration=MINIMUM_GAP_MS)
+                silence_added_ms = MINIMUM_GAP_MS
 
         # Add the segment to final audio with crossfading for smooth transitions
         # Only crossfade if:
         # 1. Not the first segment
         # 2. Previous content exists (not just starting)
-        # 3. Gap between segments is small (< 200ms) - indicates continuous speech
+        # 3. Gap is small (we're catching up) - indicates continuous speech
         should_crossfade = (
             i > 0 and
             len(final_audio) > 0 and
-            original_gap_ms < 200 and
+            silence_added_ms <= MINIMUM_GAP_MS and  # Only when catching up (small gap)
             len(generated_audio) > crossfade_duration_ms
         )
 
