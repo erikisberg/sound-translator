@@ -818,6 +818,12 @@ def main():
                             working_dir=st.session_state.working_dir
                         )
                         st.session_state.translated_segments = translated
+
+                        # Sync english back to segments for display and saving
+                        for i, trans in enumerate(translated):
+                            if i < len(st.session_state.segments):
+                                st.session_state.segments[i]["english"] = trans.get("english", "")
+
                         st.success(f"Translated {len(translated)} segments")
 
                         # Auto-save after translation
