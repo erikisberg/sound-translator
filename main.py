@@ -43,9 +43,7 @@ def create_segments_dataframe(segments: List[Dict[str, Any]]) -> pd.DataFrame:
 
     df_data = []
     for i, seg in enumerate(segments):
-        english_text = ""
-        if i < len(st.session_state.translated_segments):
-            english_text = st.session_state.translated_segments[i].get("english", "")
+        english_text = seg.get("english", "")
 
         df_data.append({
             "Start": f"{seg['start']:.2f}s",
